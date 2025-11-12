@@ -63,10 +63,12 @@ check_qc_module() {
     local QC_CONFIG="${HOME}/qc/config/install_paths.conf"
     if [ -f "$QC_CONFIG" ]; then
         log_info "QC module detected, will use compatible paths"
-        source "$QC_CONFIG"
-        # Use same installation base as QC if available
-        if [ -n "$INSTALL_BASE_DIR" ] && [ -z "$INSTALL_BASE_DIR" ]; then
-            INSTALL_BASE_DIR="$INSTALL_BASE_DIR"
+        # Only use QC path if user hasn't provided custom path
+        if [ -z "$INSTALL_BASE_DIR" ]; then
+            source "$QC_CONFIG"
+            if [ -n "$INSTALL_BASE_DIR" ]; then
+                log_info "Using QC module installation directory: $INSTALL_BASE_DIR"
+            fi
         fi
     fi
 }
@@ -230,13 +232,16 @@ install_hisat2() {
     
     unzip -q "hisat2.zip"
     
-    # FIXED: Find extracted directory case-insensitively
-    local HISAT2_EXTRACTED=$(find . -maxdepth 1 -type d -iname "hisat2-*-linux_x86_64" | head -n 1)
+    # FIXED: Find extracted directory - matches actual structure "hisat2-2.2.1"
+    local HISAT2_EXTRACTED=$(find . -maxdepth 1 -type d -iname "hisat2-${HISAT2_VERSION}*" -o -iname "hisat2-*" | head -n 1)
     if [ -z "$HISAT2_EXTRACTED" ]; then
         log_error "HISAT2 extracted directory not found"
+        log_info "Available directories:"
+        ls -la /tmp/hisat2* || true
         return 1
     fi
     
+    log_info "Found HISAT2 directory: $HISAT2_EXTRACTED"
     mkdir -p "${HISAT2_DIR}"
     cp -r "$HISAT2_EXTRACTED/"* "${HISAT2_DIR}/"
     
@@ -405,11 +410,23 @@ main() {
     DISTRO=$(detect_distro)
     log_info "Detected OS: ${DISTRO}"
     
-    # Check for QC module
+    # Parse command-line arguments FIRST
+    # (this is done before main() is called, see bottom of script)
+    
+    # Check for QC module only if no custom path provided
     check_qc_module
     
-    # Prompt for directories
-    [ -z "$INSTALL_BASE_DIR" ] && prompt_install_directory
+    # Prompt for directories if not set
+    if [ -z "$INSTALL_BASE_DIR" ]; then
+        prompt_install_directory
+    else
+        # Ensure derived directories are set
+        STAR_DIR="${INSTALL_BASE_DIR}/STAR"
+        HISAT2_DIR="${INSTALL_BASE_DIR}/HISAT2"
+        BIN_DIR="${INSTALL_BASE_DIR}/bin"
+        mkdir -p "${INSTALL_BASE_DIR}" "${BIN_DIR}"
+        log_info "Using installation directory: ${INSTALL_BASE_DIR}"
+    fi
     
     # Prompt for aligner choice
     if [ -z "$INSTALL_STAR" ] && [ -z "$INSTALL_HISAT2" ]; then
@@ -488,11 +505,13 @@ main() {
     echo ""
 }
 
-# Parse arguments
+# Parse arguments BEFORE calling main
 while [[ $# -gt 0 ]]; do
     case $1 in
         --install-dir)
             INSTALL_BASE_DIR="$2"
+            INSTALL_BASE_DIR="${INSTALL_BASE_DIR/#\~/$HOME}"
+            INSTALL_BASE_DIR="${INSTALL_BASE_DIR%/}"
             STAR_DIR="${INSTALL_BASE_DIR}/STAR"
             HISAT2_DIR="${INSTALL_BASE_DIR}/HISAT2"
             BIN_DIR="${INSTALL_BASE_DIR}/bin"
@@ -500,6 +519,8 @@ while [[ $# -gt 0 ]]; do
             shift 2 ;;
         --reference-dir)
             REFERENCE_DIR="$2"
+            REFERENCE_DIR="${REFERENCE_DIR/#\~/$HOME}"
+            REFERENCE_DIR="${REFERENCE_DIR%/}"
             mkdir -p "${REFERENCE_DIR}"
             shift 2 ;;
         --aligner)
