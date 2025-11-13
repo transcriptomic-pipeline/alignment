@@ -41,6 +41,9 @@ STAR_INDEX_DIR=""
 HISAT2_INDEX_DIR=""
 HISAT2_INDEX_PREFIX=""
 
+# Timeout for auto-continue prompts (in seconds)
+PROMPT_TIMEOUT=30
+
 # Usage
 usage() {
     cat << EOF
@@ -89,6 +92,8 @@ Integration with QC Module:
 EOF
     exit 1
 }
+
+command_exists() { command -v "$1" >/dev/null 2>&1; }
 
 # Check installation
 check_installation() {
@@ -306,13 +311,21 @@ check_or_build_hisat2_index() {
     fi
 }
 
-# Build STAR index
+# Build STAR index with AUTO-CONTINUE
 build_star_index() {
     log_info "Building STAR genome index..."
     log_warning "This may take 30-60 minutes and requires ~32 GB RAM"
     
-    read -p "Build STAR index now? [Y/n] " -n 1 -r
+    # AUTO-CONTINUE: Wait ${PROMPT_TIMEOUT} seconds, then proceed with 'y'
+    echo -ne "Build STAR index now? [Y/n] (auto-continue in ${PROMPT_TIMEOUT}s): "
+    read -t $PROMPT_TIMEOUT -n 1 -r REPLY || true
     echo
+    
+    if [ -z "$REPLY" ]; then
+        REPLY="y"
+        log_warning "No response in ${PROMPT_TIMEOUT}s, automatically proceeding with 'y'"
+    fi
+    
     if [[ $REPLY =~ ^[Nn]$ ]]; then
         log_error "STAR index required for alignment"
         exit 1
@@ -334,19 +347,27 @@ build_star_index() {
         log_success "STAR index built successfully"
         log_info "Index location: $STAR_INDEX_DIR"
     else
-        log_error "STAR index build failed"
+        log_error "STAR index build failed (check RAM - requires ~32GB)"
         log_info "Check log: ${SCRIPT_DIR}/star_index_build.log"
         exit 1
     fi
 }
 
-# Build HISAT2 index
+# Build HISAT2 index with AUTO-CONTINUE
 build_hisat2_index() {
     log_info "Building HISAT2 genome index..."
     log_warning "This may take 30-45 minutes and requires ~8 GB RAM"
     
-    read -p "Build HISAT2 index now? [Y/n] " -n 1 -r
+    # AUTO-CONTINUE: Wait ${PROMPT_TIMEOUT} seconds, then proceed with 'y'
+    echo -ne "Build HISAT2 index now? [Y/n] (auto-continue in ${PROMPT_TIMEOUT}s): "
+    read -t $PROMPT_TIMEOUT -n 1 -r REPLY || true
     echo
+    
+    if [ -z "$REPLY" ]; then
+        REPLY="y"
+        log_warning "No response in ${PROMPT_TIMEOUT}s, automatically proceeding with 'y'"
+    fi
+    
     if [[ $REPLY =~ ^[Nn]$ ]]; then
         log_error "HISAT2 index required for alignment"
         exit 1
