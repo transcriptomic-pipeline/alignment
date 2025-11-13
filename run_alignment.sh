@@ -30,6 +30,7 @@ THREADS=12
 ALIGNER=""
 REFERENCE_GENOME=""
 REFERENCE_GTF=""
+GENOME_INDEX_DIR=""
 PAIRED_END=true
 
 # Tool paths
@@ -41,11 +42,11 @@ STAR_INDEX_DIR=""
 HISAT2_INDEX_DIR=""
 HISAT2_INDEX_PREFIX=""
 
-# Python/Conda settings (loaded from config)
-USE_SYSTEM_PYTHON=""
-PYTHON_BIN=""
+# Conda settings (loaded from config)
 CONDA_DIR=""
 CONDA_ENV_NAME=""
+USE_SYSTEM_PYTHON=""
+PYTHON_BIN=""
 
 # Timeout for auto-continue prompts (in seconds)
 PROMPT_TIMEOUT=30
@@ -64,6 +65,7 @@ Optional:
     -t, --threads       Number of threads (default: 12)
     --reference         Reference FASTA file
     --gtf               Reference GTF file
+    --genome-index      Pre-built genome index directory (for STAR or HISAT2)
     --single-end        Single-end reads (default: paired-end)
     -h, --help          Show this help
 
@@ -80,11 +82,16 @@ Examples:
     # Use both aligners for comparison
     $0 -i qc_results/trimmed/PE -o alignment_results --aligner both
 
+    # Specify custom reference
+    $0 -i input/ -o output/ --aligner star --reference ref.fa --gtf genes.gtf
+
 EOF
     exit 1
 }
 
-command_exists() { command -v "$1" >/dev/null 2>&1; }
+command_exists() {
+    command -v "$1" >/dev/null 2>&1
+}
 
 # Check installation and load configuration
 check_installation() {
@@ -115,6 +122,7 @@ check_conda_env() {
     fi
     
     log_info "Checking conda environment for HISAT2..."
+    
     if [ -z "$CONDA_DIR" ] || [ ! -d "$CONDA_DIR" ]; then
         log_error "Conda directory not found: $CONDA_DIR"
         log_error "Please run: ./install.sh --aligner hisat2"
@@ -444,6 +452,18 @@ create_output_dirs() {
 }
 
 # Detect Read 2 file from Read 1 filename
+detect_pattern() {
+    local filename=$1
+    
+    if [[ "$filename" =~ _R1|_r1 ]]; then
+        echo "_R1/_R2"
+    elif [[ "$filename" =~ _1[\._] ]]; then
+        echo "_1/_2"
+    else
+        echo "unknown"
+    fi
+}
+
 find_r2_file() {
     local r1_file=$1
     local r2_file=""
@@ -481,15 +501,28 @@ align_star_pe() {
     
     "$STAR_BIN" \
         --runThreadN "$THREADS" \
+        --limitBAMsortRAM 10000000000 \
         --runMode alignReads \
         --genomeDir "$STAR_INDEX_DIR" \
         --readFilesIn "$r1_file" "$r2_file" \
         --sjdbGTFfile "$REFERENCE_GTF" \
+        --sjdbOverhang 100 \
+        --alignSJDBoverhangMin 1 \
         --outSAMtype BAM SortedByCoordinate \
         --outFileNamePrefix "$output_prefix" \
+        --outFilterMultimapScoreRange 1 \
         --outFilterMultimapNmax 20 \
+        --outFilterMismatchNmax 999 \
         --alignIntronMax 1000000 \
         --alignMatesGapMax 1000000 \
+        --outFilterMatchNminOverLread 0.66 \
+        --outFilterScoreMinOverLread 0.66 \
+        --outFilterType BySJout \
+        --chimSegmentMin 12 \
+        --chimJunctionOverhangMin 12 \
+        --outSAMstrandField intronMotif \
+        --outSAMattributes NH HI NM MD AS XS \
+        --outSAMunmapped Within \
         2>&1 | tee "${OUTPUT_DIR}/logs/${sample_id}_star.log"
     
     if [ -f "${output_prefix}Aligned.sortedByCoord.out.bam" ]; then
@@ -527,7 +560,11 @@ align_hisat2_pe() {
         -x "$HISAT2_INDEX_PREFIX" \
         -1 "$r1_file" \
         -2 "$r2_file" \
+        --phred33 \
+        --summary-file "${OUTPUT_DIR}/logs/${sample_id}_hisat2_summary.txt" \
+        --met-file "${OUTPUT_DIR}/logs/${sample_id}_hisat2_metrics.txt" \
         -p "$THREADS" \
+        --reorder \
         -S "$output_sam" \
         2>&1 | tee "${OUTPUT_DIR}/logs/${sample_id}_hisat2.log"
     
@@ -576,9 +613,10 @@ process_all_samples() {
         local sample_id=$(echo "$basename" | sed -E 's/_(R1|r1|1).*//g')
         
         local r2_file=$(find_r2_file "$r1_file")
+        local pattern=$(detect_pattern "$r1_file")
         
         if [ ! -f "$r2_file" ]; then
-            log_warning "R2 not found for $sample_id, skipping..."
+            log_warning "R2 not found for $sample_id (pattern: ${pattern}), skipping..."
             log_warning "Expected: $r2_file"
             continue
         fi
@@ -589,6 +627,7 @@ process_all_samples() {
         log_info "========================================="
         log_info "Sample ${processed_count}: ${sample_id}"
         log_info "========================================="
+        log_info "Pattern: ${pattern}"
         log_info "R1: $r1_file"
         log_info "R2: $r2_file"
         
@@ -722,6 +761,10 @@ parse_arguments() {
                 ;;
             --gtf)
                 REFERENCE_GTF="$2"
+                shift 2
+                ;;
+            --genome-index)
+                GENOME_INDEX_DIR="$2"
                 shift 2
                 ;;
             --single-end)
