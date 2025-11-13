@@ -266,7 +266,7 @@ install_hisat2() {
     fi
 }
 
-# Install Miniconda and create Python environment for HISAT2
+# Install Miniconda and create Python environment for HISAT2 (with full validation)
 install_miniconda_for_hisat2() {
     log_info "Setting up Python environment for HISAT2..."
     log_info "Installing Miniconda locally (will NOT affect system Python)"
@@ -290,17 +290,52 @@ install_miniconda_for_hisat2() {
         log_info "Miniconda already present at $CONDA_DIR"
     fi
     
-    # Initialize conda for this shell
+    # Initialize conda for this shell session
     export PATH="$CONDA_DIR/bin:$PATH"
     
+    # Source conda profile script
+    if [ -f "${CONDA_DIR}/etc/profile.d/conda.sh" ]; then
+        source "${CONDA_DIR}/etc/profile.d/conda.sh"
+    else
+        log_error "Conda profile script not found after installation"
+        return 1
+    fi
+    
     # Create environment if it doesn't exist
-    if ! "$CONDA_DIR/bin/conda" env list | grep -q "$CONDA_ENV_NAME"; then
+    if ! conda env list | grep -q "^${CONDA_ENV_NAME} "; then
         log_info "Creating conda environment '$CONDA_ENV_NAME' with Python $PYTHON_VERSION..."
-        "$CONDA_DIR/bin/conda" create -y -n "$CONDA_ENV_NAME" python="$PYTHON_VERSION" 2>&1 | grep -E "(Collecting package metadata|Solving environment|Downloading|Extracting|Preparing transaction|Executing transaction|done)" || true
+        conda create -y -n "$CONDA_ENV_NAME" python="$PYTHON_VERSION" 2>&1 | grep -E "(Collecting|Solving|Downloading|Extracting|Preparing|Executing|done)" || true
         log_success "Conda environment '$CONDA_ENV_NAME' created"
     else
         log_info "Conda environment '$CONDA_ENV_NAME' already exists"
     fi
+    
+    # Verify we can activate the environment immediately
+    log_info "Verifying conda environment activation..."
+    set +u  # Temporarily disable unset variable check
+    
+    if conda activate "$CONDA_ENV_NAME" 2>/dev/null; then
+        log_success "Conda environment activated successfully"
+        
+        # Verify Python is available
+        if python --version >/dev/null 2>&1; then
+            local PYTHON_VER=$(python --version 2>&1)
+            log_success "Python available in environment: $PYTHON_VER"
+        else
+            log_error "Python not available in conda environment"
+            conda deactivate
+            set -u
+            return 1
+        fi
+        
+        conda deactivate
+    else
+        log_error "Failed to activate conda environment"
+        set -u
+        return 1
+    fi
+    
+    set -u  # Re-enable unset variable check
     
     log_success "Python environment ready for HISAT2"
 }
@@ -611,10 +646,10 @@ Examples:
   # Install only STAR
   $0 --aligner star
 
-  # Install both, same dir as QC module
-  $0 --install-dir ~/softwares --aligner both
+  # Install both, custom directory
+  $0 --install-dir ~/Desktop/pipeline/softwares --aligner both
 
-  # Quick install with reference
+  # Install HISAT2 with reference
   $0 --aligner hisat2 --download-reference
 EOF
             exit 0 ;;
