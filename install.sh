@@ -34,10 +34,12 @@ STAR_DIR=""
 HISAT2_DIR=""
 BIN_DIR=""
 
-# Conda settings for HISAT2
+# Python/Conda settings (generic for all Python-dependent tools)
 CONDA_DIR=""
-CONDA_ENV_NAME="hisat2_env"
+CONDA_ENV_NAME="bioinfo_python3"
 PYTHON_VERSION="3.9"
+USE_SYSTEM_PYTHON="no"
+PYTHON_BIN=""
 
 # Installation flags
 INSTALL_STAR=""
@@ -61,6 +63,45 @@ detect_distro() {
     else
         echo "unknown"
     fi
+}
+
+# Check if system Python 3 is available and suitable
+check_system_python() {
+    log_info "Checking for system Python 3..."
+    
+    # Check for python3
+    if command_exists python3; then
+        local PYTHON_VER=$(python3 --version 2>&1 | grep -oP '\d+\.\d+' | head -1)
+        local MAJOR=$(echo $PYTHON_VER | cut -d. -f1)
+        local MINOR=$(echo $PYTHON_VER | cut -d. -f2)
+        
+        # Check if Python >= 3.6
+        if [ "$MAJOR" -ge 3 ] && [ "$MINOR" -ge 6 ]; then
+            log_success "System Python 3 found: $(python3 --version)"
+            PYTHON_BIN=$(command -v python3)
+            USE_SYSTEM_PYTHON="yes"
+            return 0
+        fi
+    fi
+    
+    # Check for python (might be python3)
+    if command_exists python; then
+        local PYTHON_VER=$(python --version 2>&1 | grep -oP '\d+\.\d+' | head -1)
+        local MAJOR=$(echo $PYTHON_VER | cut -d. -f1)
+        local MINOR=$(echo $PYTHON_VER | cut -d. -f2)
+        
+        if [ "$MAJOR" -ge 3 ] && [ "$MINOR" -ge 6 ]; then
+            log_success "System Python 3 found: $(python --version)"
+            PYTHON_BIN=$(command -v python)
+            USE_SYSTEM_PYTHON="yes"
+            return 0
+        fi
+    fi
+    
+    log_warning "No suitable system Python 3 found (requires >= 3.6)"
+    log_info "Will install Miniconda with Python ${PYTHON_VERSION}"
+    USE_SYSTEM_PYTHON="no"
+    return 1
 }
 
 # Check if QC module is installed (for alignment detection)
@@ -238,8 +279,8 @@ install_hisat2() {
     
     unzip -q "hisat2.zip"
     
-    # FIXED: Find extracted directory - matches actual structure "hisat2-2.2.1"
-    local HISAT2_EXTRACTED=$(find . -maxdepth 1 -type d -iname "hisat2-${HISAT2_VERSION}*" -o -iname "hisat2-*" | head -n 1)
+    # Find extracted directory - matches actual structure "hisat2-2.2.1"
+    local HISAT2_EXTRACTED=$(find . -maxdepth 1 -type d -name "hisat2-${HISAT2_VERSION}*" 2>/dev/null | head -n 1)
     if [ -z "$HISAT2_EXTRACTED" ]; then
         log_error "HISAT2 extracted directory not found"
         log_info "Available directories:"
@@ -266,9 +307,15 @@ install_hisat2() {
     fi
 }
 
-# Install Miniconda and create Python environment for HISAT2 (with full validation)
-install_miniconda_for_hisat2() {
-    log_info "Setting up Python environment for HISAT2..."
+# Install Miniconda and create Python environment (only if system Python not suitable)
+setup_python_environment() {
+    # Check if system Python is suitable
+    if check_system_python; then
+        log_success "Using system Python: $PYTHON_BIN"
+        return 0
+    fi
+    
+    log_info "Setting up Python environment via Miniconda..."
     log_info "Installing Miniconda locally (will NOT affect system Python)"
     
     if [ ! -d "$CONDA_DIR" ]; then
@@ -302,7 +349,7 @@ install_miniconda_for_hisat2() {
     fi
     
     # Create environment if it doesn't exist
-    if ! conda env list | grep -q "^${CONDA_ENV_NAME} "; then
+    if ! conda env list | grep -qw "^${CONDA_ENV_NAME}"; then
         log_info "Creating conda environment '$CONDA_ENV_NAME' with Python $PYTHON_VERSION..."
         conda create -y -n "$CONDA_ENV_NAME" python="$PYTHON_VERSION" 2>&1 | grep -E "(Collecting|Solving|Downloading|Extracting|Preparing|Executing|done)" || true
         log_success "Conda environment '$CONDA_ENV_NAME' created"
@@ -321,6 +368,7 @@ install_miniconda_for_hisat2() {
         if python --version >/dev/null 2>&1; then
             local PYTHON_VER=$(python --version 2>&1)
             log_success "Python available in environment: $PYTHON_VER"
+            PYTHON_BIN="conda_env"  # Special marker
         else
             log_error "Python not available in conda environment"
             conda deactivate
@@ -337,7 +385,7 @@ install_miniconda_for_hisat2() {
     
     set -u  # Re-enable unset variable check
     
-    log_success "Python environment ready for HISAT2"
+    log_success "Python environment ready for bioinformatics tools"
 }
 
 check_samtools() {
@@ -443,9 +491,9 @@ update_path() {
     echo "# Alignment Module - added by installer" >> "$SHELL_RC"
     echo "export PATH=\"${BIN_DIR}:\$PATH\"" >> "$SHELL_RC"
     
-    # Add conda initialization if HISAT2 installed
-    if [ "$INSTALL_HISAT2" = "yes" ] && [ -d "$CONDA_DIR" ]; then
-        echo "# Conda for HISAT2 (alignment module)" >> "$SHELL_RC"
+    # Add conda initialization if installed (but not if using system Python)
+    if [ "$USE_SYSTEM_PYTHON" = "no" ] && [ -d "$CONDA_DIR" ]; then
+        echo "# Conda for bioinformatics tools (alignment module)" >> "$SHELL_RC"
         echo "export PATH=\"${CONDA_DIR}/bin:\$PATH\"" >> "$SHELL_RC"
     fi
     
@@ -472,7 +520,9 @@ HISAT2_BIN="${BIN_DIR}/hisat2"
 HISAT2_BUILD_BIN="${BIN_DIR}/hisat2-build"
 SAMTOOLS_BIN="$(command -v samtools 2>/dev/null || echo '')"
 
-# Conda environment for HISAT2
+# Python environment (for HISAT2 and other tools)
+USE_SYSTEM_PYTHON="${USE_SYSTEM_PYTHON}"
+PYTHON_BIN="${PYTHON_BIN}"
 CONDA_DIR="${CONDA_DIR}"
 CONDA_ENV_NAME="${CONDA_ENV_NAME}"
 EOF
@@ -500,9 +550,6 @@ main() {
     
     DISTRO=$(detect_distro)
     log_info "Detected OS: ${DISTRO}"
-    
-    # Parse command-line arguments FIRST
-    # (this is done before main() is called, see bottom of script)
     
     # Check for QC module only if no custom path provided
     check_qc_module
@@ -545,9 +592,9 @@ main() {
     
     if [ "$INSTALL_HISAT2" = "yes" ]; then
         check_hisat2 || install_hisat2 || log_error "HISAT2 installation failed"
-        # Install Miniconda and Python environment for HISAT2
+        # Setup Python environment (system or conda) for HISAT2 and future tools
         echo ""
-        install_miniconda_for_hisat2 || log_warning "Conda setup incomplete"
+        setup_python_environment || log_warning "Python environment setup incomplete"
     else
         log_info "Skipping HISAT2"
     fi
@@ -587,13 +634,18 @@ main() {
     echo ""
     log_info "Installed tools:"
     [ "$INSTALL_STAR" = "yes" ] && echo "  ✓ STAR ${STAR_VERSION}"
-    [ "$INSTALL_HISAT2" = "yes" ] && echo "  ✓ HISAT2 ${HISAT2_VERSION} (with Python environment)"
+    [ "$INSTALL_HISAT2" = "yes" ] && echo "  ✓ HISAT2 ${HISAT2_VERSION}"
     [ "$INSTALL_SAMTOOLS" = "yes" ] && echo "  ✓ samtools"
+    if [ "$USE_SYSTEM_PYTHON" = "yes" ]; then
+        echo "  ✓ Python (system: $PYTHON_BIN)"
+    else
+        echo "  ✓ Python ${PYTHON_VERSION} (conda env: $CONDA_ENV_NAME)"
+    fi
     echo ""
-    log_info "Paths (aligned with QC module):"
+    log_info "Paths:"
     log_info "  Tools: ${INSTALL_BASE_DIR}"
     [ "$DOWNLOAD_REFERENCE" = "yes" ] && log_info "  Reference: ${REFERENCE_DIR}"
-    [ "$INSTALL_HISAT2" = "yes" ] && log_info "  Conda: ${CONDA_DIR}"
+    [ "$USE_SYSTEM_PYTHON" = "no" ] && log_info "  Conda: ${CONDA_DIR}"
     echo ""
     log_warning "Restart terminal or run: source ~/.bashrc"
     echo ""
