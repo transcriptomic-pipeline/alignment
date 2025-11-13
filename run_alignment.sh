@@ -2,6 +2,7 @@
 
 # Alignment Module - Main Execution Script
 # Supports STAR and HISAT2 with auto-installation, auto-indexing, and "both" mode
+# Uses pre-installed Miniconda environment for HISAT2
 
 set -euo pipefail
 
@@ -40,6 +41,10 @@ SAMTOOLS_BIN=""
 STAR_INDEX_DIR=""
 HISAT2_INDEX_DIR=""
 HISAT2_INDEX_PREFIX=""
+
+# Conda settings (loaded from config)
+CONDA_DIR=""
+CONDA_ENV_NAME=""
 
 # Timeout for auto-continue prompts (in seconds)
 PROMPT_TIMEOUT=30
@@ -94,6 +99,29 @@ EOF
 }
 
 command_exists() { command -v "$1" >/dev/null 2>&1; }
+
+# Check if conda environment exists (should be installed by install.sh)
+check_conda_env() {
+    if [ -z "$CONDA_DIR" ] || [ ! -d "$CONDA_DIR" ]; then
+        log_error "Conda environment not found for HISAT2"
+        log_error "Please run: ./install.sh --aligner hisat2"
+        exit 1
+    fi
+    
+    if [ ! -f "$CONDA_DIR/bin/conda" ]; then
+        log_error "Conda not properly installed at: $CONDA_DIR"
+        log_error "Please run: ./install.sh --aligner hisat2"
+        exit 1
+    fi
+    
+    if ! "$CONDA_DIR/bin/conda" env list | grep -q "$CONDA_ENV_NAME"; then
+        log_error "Conda environment '$CONDA_ENV_NAME' not found"
+        log_error "Please run: ./install.sh --aligner hisat2"
+        exit 1
+    fi
+    
+    log_info "Using conda environment: $CONDA_ENV_NAME"
+}
 
 # Check installation
 check_installation() {
@@ -353,7 +381,7 @@ build_star_index() {
     fi
 }
 
-# Build HISAT2 index with AUTO-CONTINUE
+# Build HISAT2 index with AUTO-CONTINUE (uses pre-installed conda env)
 build_hisat2_index() {
     log_info "Building HISAT2 genome index..."
     log_warning "This may take 30-45 minutes and requires ~8 GB RAM"
@@ -375,14 +403,28 @@ build_hisat2_index() {
     
     mkdir -p "$HISAT2_INDEX_DIR"
     
-    log_info "Running HISAT2 genome index build..."
+    # Check conda environment (should be pre-installed)
+    check_conda_env
+    
+    log_info "Running HISAT2 genome index build in conda environment..."
+    
+    # Activate conda environment and run hisat2-build
+    set +u  # Temporarily disable unset variable check for conda
+    source "$CONDA_DIR/etc/profile.d/conda.sh"
+    conda activate "$CONDA_ENV_NAME"
+    
     "$HISAT2_BUILD_BIN" \
         -f "$REFERENCE_GENOME" \
         -p "$THREADS" \
         "$HISAT2_INDEX_PREFIX" \
         2>&1 | tee "${SCRIPT_DIR}/hisat2_index_build.log"
     
-    if [ $? -eq 0 ]; then
+    local BUILD_STATUS=$?
+    
+    conda deactivate
+    set -u  # Re-enable unset variable check
+    
+    if [ $BUILD_STATUS -eq 0 ]; then
         log_success "HISAT2 index built successfully"
         log_info "Index location: $HISAT2_INDEX_DIR"
     else
