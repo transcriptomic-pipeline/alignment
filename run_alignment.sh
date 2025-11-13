@@ -734,7 +734,7 @@ process_all_samples() {
     echo ""
     
     # Auto-continue after timeout
-    local continue_timeout=10
+    local continue_timeout=30
     echo -ne "Continue with detected pattern? [Y/n] (auto-continue in ${continue_timeout}s): "
     read -t $continue_timeout -n 1 -r REPLY || true
     echo
