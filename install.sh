@@ -34,6 +34,11 @@ STAR_DIR=""
 HISAT2_DIR=""
 BIN_DIR=""
 
+# Conda settings for HISAT2
+CONDA_DIR=""
+CONDA_ENV_NAME="hisat2_env"
+PYTHON_VERSION="3.9"
+
 # Installation flags
 INSTALL_STAR=""
 INSTALL_HISAT2=""
@@ -101,6 +106,7 @@ prompt_install_directory() {
     STAR_DIR="${INSTALL_BASE_DIR}/STAR"
     HISAT2_DIR="${INSTALL_BASE_DIR}/HISAT2"
     BIN_DIR="${INSTALL_BASE_DIR}/bin"
+    CONDA_DIR="${INSTALL_BASE_DIR}/miniconda"
     
     mkdir -p "${INSTALL_BASE_DIR}" "${BIN_DIR}"
     log_success "Installation directory: ${INSTALL_BASE_DIR}"
@@ -260,6 +266,45 @@ install_hisat2() {
     fi
 }
 
+# Install Miniconda and create Python environment for HISAT2
+install_miniconda_for_hisat2() {
+    log_info "Setting up Python environment for HISAT2..."
+    log_info "Installing Miniconda locally (will NOT affect system Python)"
+    
+    if [ ! -d "$CONDA_DIR" ]; then
+        log_info "Downloading Miniconda..."
+        
+        local CONDA_INSTALLER="${INSTALL_BASE_DIR}/miniconda_installer.sh"
+        
+        if ! wget -q --show-progress https://repo.anaconda.com/miniconda/Miniconda3-latest-Linux-x86_64.sh -O "$CONDA_INSTALLER"; then
+            log_error "Failed to download Miniconda"
+            return 1
+        fi
+        
+        log_info "Installing Miniconda to: $CONDA_DIR"
+        bash "$CONDA_INSTALLER" -b -p "$CONDA_DIR"
+        rm -f "$CONDA_INSTALLER"
+        
+        log_success "Miniconda installed"
+    else
+        log_info "Miniconda already present at $CONDA_DIR"
+    fi
+    
+    # Initialize conda for this shell
+    export PATH="$CONDA_DIR/bin:$PATH"
+    
+    # Create environment if it doesn't exist
+    if ! "$CONDA_DIR/bin/conda" env list | grep -q "$CONDA_ENV_NAME"; then
+        log_info "Creating conda environment '$CONDA_ENV_NAME' with Python $PYTHON_VERSION..."
+        "$CONDA_DIR/bin/conda" create -y -n "$CONDA_ENV_NAME" python="$PYTHON_VERSION" 2>&1 | grep -E "(Collecting package metadata|Solving environment|Downloading|Extracting|Preparing transaction|Executing transaction|done)" || true
+        log_success "Conda environment '$CONDA_ENV_NAME' created"
+    else
+        log_info "Conda environment '$CONDA_ENV_NAME' already exists"
+    fi
+    
+    log_success "Python environment ready for HISAT2"
+}
+
 check_samtools() {
     if command_exists samtools; then
         log_success "samtools already installed"
@@ -362,6 +407,13 @@ update_path() {
     echo "" >> "$SHELL_RC"
     echo "# Alignment Module - added by installer" >> "$SHELL_RC"
     echo "export PATH=\"${BIN_DIR}:\$PATH\"" >> "$SHELL_RC"
+    
+    # Add conda initialization if HISAT2 installed
+    if [ "$INSTALL_HISAT2" = "yes" ] && [ -d "$CONDA_DIR" ]; then
+        echo "# Conda for HISAT2 (alignment module)" >> "$SHELL_RC"
+        echo "export PATH=\"${CONDA_DIR}/bin:\$PATH\"" >> "$SHELL_RC"
+    fi
+    
     export PATH="${BIN_DIR}:$PATH"
     
     log_success "PATH updated"
@@ -384,6 +436,10 @@ STAR_BIN="${BIN_DIR}/STAR"
 HISAT2_BIN="${BIN_DIR}/hisat2"
 HISAT2_BUILD_BIN="${BIN_DIR}/hisat2-build"
 SAMTOOLS_BIN="$(command -v samtools 2>/dev/null || echo '')"
+
+# Conda environment for HISAT2
+CONDA_DIR="${CONDA_DIR}"
+CONDA_ENV_NAME="${CONDA_ENV_NAME}"
 EOF
     
     cat > "${SCRIPT_DIR}/config/reference_paths.conf" << EOF
@@ -424,6 +480,7 @@ main() {
         STAR_DIR="${INSTALL_BASE_DIR}/STAR"
         HISAT2_DIR="${INSTALL_BASE_DIR}/HISAT2"
         BIN_DIR="${INSTALL_BASE_DIR}/bin"
+        CONDA_DIR="${INSTALL_BASE_DIR}/miniconda"
         mkdir -p "${INSTALL_BASE_DIR}" "${BIN_DIR}"
         log_info "Using installation directory: ${INSTALL_BASE_DIR}"
     fi
@@ -453,6 +510,9 @@ main() {
     
     if [ "$INSTALL_HISAT2" = "yes" ]; then
         check_hisat2 || install_hisat2 || log_error "HISAT2 installation failed"
+        # Install Miniconda and Python environment for HISAT2
+        echo ""
+        install_miniconda_for_hisat2 || log_warning "Conda setup incomplete"
     else
         log_info "Skipping HISAT2"
     fi
@@ -492,12 +552,13 @@ main() {
     echo ""
     log_info "Installed tools:"
     [ "$INSTALL_STAR" = "yes" ] && echo "  ✓ STAR ${STAR_VERSION}"
-    [ "$INSTALL_HISAT2" = "yes" ] && echo "  ✓ HISAT2 ${HISAT2_VERSION}"
+    [ "$INSTALL_HISAT2" = "yes" ] && echo "  ✓ HISAT2 ${HISAT2_VERSION} (with Python environment)"
     [ "$INSTALL_SAMTOOLS" = "yes" ] && echo "  ✓ samtools"
     echo ""
     log_info "Paths (aligned with QC module):"
     log_info "  Tools: ${INSTALL_BASE_DIR}"
     [ "$DOWNLOAD_REFERENCE" = "yes" ] && log_info "  Reference: ${REFERENCE_DIR}"
+    [ "$INSTALL_HISAT2" = "yes" ] && log_info "  Conda: ${CONDA_DIR}"
     echo ""
     log_warning "Restart terminal or run: source ~/.bashrc"
     echo ""
@@ -515,6 +576,7 @@ while [[ $# -gt 0 ]]; do
             STAR_DIR="${INSTALL_BASE_DIR}/STAR"
             HISAT2_DIR="${INSTALL_BASE_DIR}/HISAT2"
             BIN_DIR="${INSTALL_BASE_DIR}/bin"
+            CONDA_DIR="${INSTALL_BASE_DIR}/miniconda"
             mkdir -p "${INSTALL_BASE_DIR}" "${BIN_DIR}"
             shift 2 ;;
         --reference-dir)
