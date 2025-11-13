@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # Alignment Module Installation Script
-# Aligns with QC module structure for seamless pipeline integration
+# Robust system Python detection with fallback to Miniconda
 
 set -euo pipefail
 
@@ -24,7 +24,7 @@ HISAT2_URL="https://cloud.biohpc.swmed.edu/index.php/s/oTtGWbWjaxsQ2Ho/download/
 REFERENCE_FASTA_URL="https://ftp.ensembl.org/pub/release-113/fasta/homo_sapiens/dna/Homo_sapiens.GRCh38.dna.primary_assembly.fa.gz"
 REFERENCE_GTF_URL="https://ftp.ensembl.org/pub/release-113/gtf/homo_sapiens/Homo_sapiens.GRCh38.113.gtf.gz"
 
-# Defaults (aligned with QC module)
+# Defaults
 DEFAULT_INSTALL_DIR="${HOME}/softwares"
 DEFAULT_REFERENCE_DIR="${HOME}/references/GRCh38_ensembl113"
 
@@ -34,7 +34,7 @@ STAR_DIR=""
 HISAT2_DIR=""
 BIN_DIR=""
 
-# Python/Conda settings (generic for all Python-dependent tools)
+# Python/Conda settings
 CONDA_DIR=""
 CONDA_ENV_NAME="bioinfo_python3"
 PYTHON_VERSION="3.9"
@@ -65,51 +65,55 @@ detect_distro() {
     fi
 }
 
-# Check if system Python 3 is available and suitable
+# Robust system Python check
 check_system_python() {
     log_info "Checking for system Python 3..."
     
-    # Check for python3
+    # Try python3 first
     if command_exists python3; then
-        local PYTHON_VER=$(python3 --version 2>&1 | grep -oP '\d+\.\d+' | head -1)
-        local MAJOR=$(echo $PYTHON_VER | cut -d. -f1)
-        local MINOR=$(echo $PYTHON_VER | cut -d. -f2)
-        
-        # Check if Python >= 3.6
-        if [ "$MAJOR" -ge 3 ] && [ "$MINOR" -ge 6 ]; then
-            log_success "System Python 3 found: $(python3 --version)"
-            PYTHON_BIN=$(command -v python3)
-            USE_SYSTEM_PYTHON="yes"
-            return 0
+        local PYTHON_VERSION_OUTPUT=$(python3 --version 2>&1)
+        if [[ "$PYTHON_VERSION_OUTPUT" =~ Python\ ([0-9]+)\.([0-9]+) ]]; then
+            local MAJOR="${BASH_REMATCH[1]}"
+            local MINOR="${BASH_REMATCH[2]}"
+            
+            if [ "$MAJOR" -eq 3 ] && [ "$MINOR" -ge 6 ]; then
+                PYTHON_BIN=$(command -v python3)
+                USE_SYSTEM_PYTHON="yes"
+                log_success "System Python 3 found: $PYTHON_VERSION_OUTPUT"
+                log_info "Using system Python: $PYTHON_BIN"
+                return 0
+            fi
         fi
     fi
     
-    # Check for python (might be python3)
+    # Try python (might be python3)
     if command_exists python; then
-        local PYTHON_VER=$(python --version 2>&1 | grep -oP '\d+\.\d+' | head -1)
-        local MAJOR=$(echo $PYTHON_VER | cut -d. -f1)
-        local MINOR=$(echo $PYTHON_VER | cut -d. -f2)
-        
-        if [ "$MAJOR" -ge 3 ] && [ "$MINOR" -ge 6 ]; then
-            log_success "System Python 3 found: $(python --version)"
-            PYTHON_BIN=$(command -v python)
-            USE_SYSTEM_PYTHON="yes"
-            return 0
+        local PYTHON_VERSION_OUTPUT=$(python --version 2>&1)
+        if [[ "$PYTHON_VERSION_OUTPUT" =~ Python\ ([0-9]+)\.([0-9]+) ]]; then
+            local MAJOR="${BASH_REMATCH[1]}"
+            local MINOR="${BASH_REMATCH[2]}"
+            
+            if [ "$MAJOR" -eq 3 ] && [ "$MINOR" -ge 6 ]; then
+                PYTHON_BIN=$(command -v python)
+                USE_SYSTEM_PYTHON="yes"
+                log_success "System Python 3 found: $PYTHON_VERSION_OUTPUT"
+                log_info "Using system Python: $PYTHON_BIN"
+                return 0
+            fi
         fi
     fi
     
     log_warning "No suitable system Python 3 found (requires >= 3.6)"
     log_info "Will install Miniconda with Python ${PYTHON_VERSION}"
     USE_SYSTEM_PYTHON="no"
+    PYTHON_BIN=""
     return 1
 }
 
-# Check if QC module is installed (for alignment detection)
 check_qc_module() {
     local QC_CONFIG="${HOME}/qc/config/install_paths.conf"
     if [ -f "$QC_CONFIG" ]; then
-        log_info "QC module detected, will use compatible paths"
-        # Only use QC path if user hasn't provided custom path
+        log_info "QC module detected"
         if [ -z "$INSTALL_BASE_DIR" ]; then
             source "$QC_CONFIG"
             if [ -n "$INSTALL_BASE_DIR" ]; then
@@ -127,7 +131,7 @@ prompt_install_directory() {
     echo ""
     log_info "Choose installation directory"
     echo ""
-    echo "  1) ${HOME}/softwares (recommended, matches QC module)"
+    echo "  1) ${HOME}/softwares (recommended)"
     echo "  2) /opt/alignment-tools (system-wide, requires sudo)"
     echo "  3) Custom directory"
     echo ""
@@ -161,39 +165,17 @@ prompt_aligner_choice() {
     echo ""
     log_info "Which aligner(s) do you want to install?"
     echo ""
-    echo "  1) STAR only (recommended for high-memory systems)"
-    echo "     - Memory: 32+ GB"
-    echo "     - Best for: Splice-aware alignment, isoform detection"
-    echo ""
-    echo "  2) HISAT2 only (recommended for limited resources)"
-    echo "     - Memory: 8-16 GB"
-    echo "     - Best for: Fast alignment, low memory usage"
-    echo ""
-    echo "  3) Both STAR and HISAT2 (flexibility)"
-    echo "     - Choose aligner at runtime"
+    echo "  1) STAR only (high memory ~32GB)"
+    echo "  2) HISAT2 only (low memory ~8GB)"
+    echo "  3) Both (choose at runtime)"
     echo ""
     read -p "Enter choice [1-3] (default: 3): " ALIGNER_CHOICE
     
     case "${ALIGNER_CHOICE:-3}" in
-        1) 
-            INSTALL_STAR="yes"
-            INSTALL_HISAT2="no"
-            log_info "Selected: STAR only"
-            ;;
-        2) 
-            INSTALL_STAR="no"
-            INSTALL_HISAT2="yes"
-            log_info "Selected: HISAT2 only"
-            ;;
-        3) 
-            INSTALL_STAR="yes"
-            INSTALL_HISAT2="yes"
-            log_info "Selected: Both aligners"
-            ;;
-        *) 
-            INSTALL_STAR="yes"
-            INSTALL_HISAT2="yes"
-            ;;
+        1) INSTALL_STAR="yes"; INSTALL_HISAT2="no" ;;
+        2) INSTALL_STAR="no"; INSTALL_HISAT2="yes" ;;
+        3) INSTALL_STAR="yes"; INSTALL_HISAT2="yes" ;;
+        *) INSTALL_STAR="yes"; INSTALL_HISAT2="yes" ;;
     esac
 }
 
@@ -215,80 +197,44 @@ prompt_reference_directory() {
     
     REFERENCE_DIR="${REFERENCE_DIR/#\~/$HOME}"
     REFERENCE_DIR="${REFERENCE_DIR%/}"
-    
     mkdir -p "${REFERENCE_DIR}"
     log_success "Reference directory: ${REFERENCE_DIR}"
 }
 
 check_star() {
-    if [ -f "${STAR_DIR}/STAR" ] && "${STAR_DIR}/STAR" --version >/dev/null 2>&1; then
-        log_success "STAR already installed"
-        return 0
-    fi
-    return 1
+    [ -f "${STAR_DIR}/STAR" ] && "${STAR_DIR}/STAR" --version >/dev/null 2>&1
 }
 
 install_star() {
     log_info "Installing STAR ${STAR_VERSION}..."
-    
     cd /tmp
-    if ! wget -q --show-progress "${STAR_URL}" -O "STAR.zip"; then
-        log_error "Failed to download STAR"
-        return 1
-    fi
-    
+    wget -q --show-progress "${STAR_URL}" -O "STAR.zip" || return 1
     unzip -q "STAR.zip"
     mkdir -p "${STAR_DIR}"
     
-    # Find and copy STAR binary
     local STAR_BINARY=$(find . -name "STAR" -type f -executable 2>/dev/null | grep "Linux_x86_64" | head -n 1)
-    if [ -z "$STAR_BINARY" ]; then
-        log_error "STAR binary not found"
-        return 1
-    fi
+    [ -z "$STAR_BINARY" ] && return 1
     
     cp "$STAR_BINARY" "${STAR_DIR}/"
     ln -sf "${STAR_DIR}/STAR" "${BIN_DIR}/STAR"
     rm -rf STAR* "STAR.zip"
     
-    if "${STAR_DIR}/STAR" --version >/dev/null 2>&1; then
-        log_success "STAR installed successfully"
-        return 0
-    else
-        log_error "STAR verification failed"
-        return 1
-    fi
+    "${STAR_DIR}/STAR" --version >/dev/null 2>&1
 }
 
 check_hisat2() {
-    if [ -f "${HISAT2_DIR}/hisat2" ] && "${HISAT2_DIR}/hisat2" --version >/dev/null 2>&1; then
-        log_success "HISAT2 already installed"
-        return 0
-    fi
-    return 1
+    [ -f "${HISAT2_DIR}/hisat2" ] && "${HISAT2_DIR}/hisat2" --version >/dev/null 2>&1
 }
 
 install_hisat2() {
     log_info "Installing HISAT2 ${HISAT2_VERSION}..."
-    
     cd /tmp
-    if ! wget -q --show-progress "${HISAT2_URL}" -O "hisat2.zip"; then
-        log_error "Failed to download HISAT2"
-        return 1
-    fi
-    
+    wget -q --show-progress "${HISAT2_URL}" -O "hisat2.zip" || return 1
     unzip -q "hisat2.zip"
     
-    # Find extracted directory - matches actual structure "hisat2-2.2.1"
     local HISAT2_EXTRACTED=$(find . -maxdepth 1 -type d -name "hisat2-${HISAT2_VERSION}*" 2>/dev/null | head -n 1)
-    if [ -z "$HISAT2_EXTRACTED" ]; then
-        log_error "HISAT2 extracted directory not found"
-        log_info "Available directories:"
-        ls -la /tmp/hisat2* || true
-        return 1
-    fi
+    [ -z "$HISAT2_EXTRACTED" ] && return 1
     
-    log_info "Found HISAT2 directory: $HISAT2_EXTRACTED"
     mkdir -p "${HISAT2_DIR}"
     cp -r "$HISAT2_EXTRACTED/"* "${HISAT2_DIR}/"
     
@@ -297,129 +243,71 @@ install_hisat2() {
     ln -sf "${HISAT2_DIR}/hisat2-inspect" "${BIN_DIR}/hisat2-inspect"
     
     rm -rf hisat2* "hisat2.zip"
-    
-    if "${HISAT2_DIR}/hisat2" --version >/dev/null 2>&1; then
-        log_success "HISAT2 installed successfully"
-        return 0
-    else
-        log_error "HISAT2 verification failed"
-        return 1
-    fi
+    "${HISAT2_DIR}/hisat2" --version >/dev/null 2>&1
 }
 
-# Install Miniconda and create Python environment (only if system Python not suitable)
+# Setup Python environment (only if system Python not suitable)
 setup_python_environment() {
     # Check if system Python is suitable
     if check_system_python; then
-        log_success "Using system Python: $PYTHON_BIN"
         return 0
     fi
     
     log_info "Setting up Python environment via Miniconda..."
-    log_info "Installing Miniconda locally (will NOT affect system Python)"
     
     if [ ! -d "$CONDA_DIR" ]; then
         log_info "Downloading Miniconda..."
-        
         local CONDA_INSTALLER="${INSTALL_BASE_DIR}/miniconda_installer.sh"
+        wget -q --show-progress https://repo.anaconda.com/miniconda/Miniconda3-latest-Linux-x86_64.sh -O "$CONDA_INSTALLER" || return 1
         
-        if ! wget -q --show-progress https://repo.anaconda.com/miniconda/Miniconda3-latest-Linux-x86_64.sh -O "$CONDA_INSTALLER"; then
-            log_error "Failed to download Miniconda"
-            return 1
-        fi
-        
-        log_info "Installing Miniconda to: $CONDA_DIR"
         bash "$CONDA_INSTALLER" -b -p "$CONDA_DIR"
         rm -f "$CONDA_INSTALLER"
-        
         log_success "Miniconda installed"
-    else
-        log_info "Miniconda already present at $CONDA_DIR"
     fi
     
-    # Initialize conda for this shell session
+    # Initialize conda
     export PATH="$CONDA_DIR/bin:$PATH"
+    [ ! -f "${CONDA_DIR}/etc/profile.d/conda.sh" ] && return 1
+    source "${CONDA_DIR}/etc/profile.d/conda.sh"
     
-    # Source conda profile script
-    if [ -f "${CONDA_DIR}/etc/profile.d/conda.sh" ]; then
-        source "${CONDA_DIR}/etc/profile.d/conda.sh"
-    else
-        log_error "Conda profile script not found after installation"
-        return 1
-    fi
-    
-    # Create environment if it doesn't exist
+    # Create environment
     if ! conda env list | grep -qw "^${CONDA_ENV_NAME}"; then
-        log_info "Creating conda environment '$CONDA_ENV_NAME' with Python $PYTHON_VERSION..."
-        conda create -y -n "$CONDA_ENV_NAME" python="$PYTHON_VERSION" 2>&1 | grep -E "(Collecting|Solving|Downloading|Extracting|Preparing|Executing|done)" || true
-        log_success "Conda environment '$CONDA_ENV_NAME' created"
-    else
-        log_info "Conda environment '$CONDA_ENV_NAME' already exists"
+        log_info "Creating conda environment '$CONDA_ENV_NAME'..."
+        conda create -y -n "$CONDA_ENV_NAME" python="$PYTHON_VERSION" 2>&1 | grep -E "(Collecting|Solving|done)" || true
     fi
     
-    # Verify we can activate the environment immediately
-    log_info "Verifying conda environment activation..."
-    set +u  # Temporarily disable unset variable check
-    
+    # Verify activation
+    set +u
     if conda activate "$CONDA_ENV_NAME" 2>/dev/null; then
-        log_success "Conda environment activated successfully"
-        
-        # Verify Python is available
-        if python --version >/dev/null 2>&1; then
-            local PYTHON_VER=$(python --version 2>&1)
-            log_success "Python available in environment: $PYTHON_VER"
-            PYTHON_BIN="conda_env"  # Special marker
-        else
-            log_error "Python not available in conda environment"
-            conda deactivate
-            set -u
-            return 1
-        fi
-        
+        python --version && log_success "Python environment ready"
         conda deactivate
     else
         log_error "Failed to activate conda environment"
         set -u
         return 1
     fi
-    
-    set -u  # Re-enable unset variable check
-    
-    log_success "Python environment ready for bioinformatics tools"
+    set -u
+    return 0
 }
 
 check_samtools() {
-    if command_exists samtools; then
-        log_success "samtools already installed"
-        return 0
-    fi
-    return 1
+    command_exists samtools
 }
 
 install_samtools() {
     log_info "Installing samtools..."
-    
     DISTRO=$(detect_distro)
     case "$DISTRO" in
         ubuntu|debian|linuxmint|mint)
             sudo apt-get update && sudo apt-get install -y samtools ;;
         centos|rhel|redhat|fedora)
             sudo yum install -y samtools ;;
-        *)
-            log_error "Unsupported distribution"
-            return 1 ;;
+        *) return 1 ;;
     esac
-    
-    if command_exists samtools; then
-        log_success "samtools installed"
-        return 0
-    fi
-    return 1
 }
 
 check_dependencies() {
     log_info "Checking dependencies..."
-    
     local MISSING=()
     command_exists wget || MISSING+=("wget")
     command_exists unzip || MISSING+=("unzip")
@@ -427,7 +315,6 @@ check_dependencies() {
     
     if [ ${#MISSING[@]} -gt 0 ]; then
         log_warning "Missing: ${MISSING[*]}"
-        
         DISTRO=$(detect_distro)
         case "$DISTRO" in
             ubuntu|debian|linuxmint|mint)
@@ -436,70 +323,35 @@ check_dependencies() {
                 sudo yum install -y wget unzip gzip ;;
         esac
     fi
-    
-    log_success "Dependencies ready"
 }
 
 download_reference() {
-    log_info "Downloading reference genome (GRCh38 Ensembl 113)..."
-    log_warning "This will download ~1 GB of data"
-    
+    log_info "Downloading reference genome..."
     cd "${REFERENCE_DIR}"
     
-    # Download FASTA
     if [ ! -f "Homo_sapiens.GRCh38.dna.primary_assembly.fa" ]; then
-        log_info "Downloading reference FASTA (~900 MB)..."
-        if wget -q --show-progress "${REFERENCE_FASTA_URL}" -O Homo_sapiens.GRCh38.dna.primary_assembly.fa.gz; then
-            log_info "Extracting FASTA..."
-            gunzip -f Homo_sapiens.GRCh38.dna.primary_assembly.fa.gz
-            log_success "Reference FASTA ready"
-        else
-            log_error "Failed to download FASTA"
-            return 1
-        fi
-    else
-        log_success "Reference FASTA already exists"
+        wget -q --show-progress "${REFERENCE_FASTA_URL}" -O Homo_sapiens.GRCh38.dna.primary_assembly.fa.gz
+        gunzip -f Homo_sapiens.GRCh38.dna.primary_assembly.fa.gz
     fi
     
-    # Download GTF
     if [ ! -f "Homo_sapiens.GRCh38.113.gtf" ]; then
-        log_info "Downloading reference GTF (~50 MB)..."
-        if wget -q --show-progress "${REFERENCE_GTF_URL}" -O Homo_sapiens.GRCh38.113.gtf.gz; then
-            log_info "Extracting GTF..."
-            gunzip -f Homo_sapiens.GRCh38.113.gtf.gz
-            log_success "Reference GTF ready"
-        else
-            log_error "Failed to download GTF"
-            return 1
-        fi
-    else
-        log_success "Reference GTF already exists"
+        wget -q --show-progress "${REFERENCE_GTF_URL}" -O Homo_sapiens.GRCh38.113.gtf.gz
+        gunzip -f Homo_sapiens.GRCh38.113.gtf.gz
     fi
-    
-    log_success "Reference genome ready: ${REFERENCE_DIR}"
 }
 
 update_path() {
     local SHELL_RC="${HOME}/.bashrc"
-    
-    if grep -q "# Alignment Module" "$SHELL_RC" 2>/dev/null; then
-        log_warning "PATH already configured"
-        return 0
-    fi
+    grep -q "# Alignment Module" "$SHELL_RC" 2>/dev/null && return 0
     
     echo "" >> "$SHELL_RC"
-    echo "# Alignment Module - added by installer" >> "$SHELL_RC"
+    echo "# Alignment Module" >> "$SHELL_RC"
     echo "export PATH=\"${BIN_DIR}:\$PATH\"" >> "$SHELL_RC"
     
-    # Add conda initialization if installed (but not if using system Python)
     if [ "$USE_SYSTEM_PYTHON" = "no" ] && [ -d "$CONDA_DIR" ]; then
-        echo "# Conda for bioinformatics tools (alignment module)" >> "$SHELL_RC"
         echo "export PATH=\"${CONDA_DIR}/bin:\$PATH\"" >> "$SHELL_RC"
     fi
-    
     export PATH="${BIN_DIR}:$PATH"
-    
-    log_success "PATH updated"
 }
 
 save_config() {
@@ -520,7 +372,7 @@ HISAT2_BIN="${BIN_DIR}/hisat2"
 HISAT2_BUILD_BIN="${BIN_DIR}/hisat2-build"
 SAMTOOLS_BIN="$(command -v samtools 2>/dev/null || echo '')"
 
-# Python environment (for HISAT2 and other tools)
+# Python environment
 USE_SYSTEM_PYTHON="${USE_SYSTEM_PYTHON}"
 PYTHON_BIN="${PYTHON_BIN}"
 CONDA_DIR="${CONDA_DIR}"
@@ -529,8 +381,6 @@ EOF
     
     cat > "${SCRIPT_DIR}/config/reference_paths.conf" << EOF
 # Reference Genome Configuration
-# Generated: $(date)
-
 REFERENCE_DIR="${REFERENCE_DIR}"
 REFERENCE_FASTA="${REFERENCE_DIR}/Homo_sapiens.GRCh38.dna.primary_assembly.fa"
 REFERENCE_GTF="${REFERENCE_DIR}/Homo_sapiens.GRCh38.113.gtf"
@@ -538,8 +388,6 @@ STAR_INDEX_DIR="${REFERENCE_DIR}/STAR_index"
 HISAT2_INDEX_DIR="${REFERENCE_DIR}/HISAT2_index"
 HISAT2_INDEX_PREFIX="${REFERENCE_DIR}/HISAT2_index/genome"
 EOF
-    
-    log_success "Configuration saved"
 }
 
 main() {
@@ -548,80 +396,40 @@ main() {
     echo "========================================"
     echo ""
     
-    DISTRO=$(detect_distro)
-    log_info "Detected OS: ${DISTRO}"
-    
-    # Check for QC module only if no custom path provided
     check_qc_module
     
-    # Prompt for directories if not set
-    if [ -z "$INSTALL_BASE_DIR" ]; then
-        prompt_install_directory
-    else
-        # Ensure derived directories are set
+    [ -z "$INSTALL_BASE_DIR" ] && prompt_install_directory || {
         STAR_DIR="${INSTALL_BASE_DIR}/STAR"
         HISAT2_DIR="${INSTALL_BASE_DIR}/HISAT2"
         BIN_DIR="${INSTALL_BASE_DIR}/bin"
         CONDA_DIR="${INSTALL_BASE_DIR}/miniconda"
         mkdir -p "${INSTALL_BASE_DIR}" "${BIN_DIR}"
-        log_info "Using installation directory: ${INSTALL_BASE_DIR}"
-    fi
+    }
     
-    # Prompt for aligner choice
-    if [ -z "$INSTALL_STAR" ] && [ -z "$INSTALL_HISAT2" ]; then
-        prompt_aligner_choice
-    fi
-    
+    [ -z "$INSTALL_STAR" ] && [ -z "$INSTALL_HISAT2" ] && prompt_aligner_choice
     [ -z "$INSTALL_SAMTOOLS" ] && INSTALL_SAMTOOLS="yes"
     
-    # Check dependencies
     check_dependencies
     
-    # Install selected aligners
     echo ""
-    log_info "Installing selected tools..."
-    echo ""
-    
-    if [ "$INSTALL_STAR" = "yes" ]; then
-        check_star || install_star || log_error "STAR installation failed"
-    else
-        log_info "Skipping STAR"
-    fi
-    
-    echo ""
+    [ "$INSTALL_STAR" = "yes" ] && { check_star && log_success "STAR already installed" || install_star && log_success "STAR installed"; }
     
     if [ "$INSTALL_HISAT2" = "yes" ]; then
-        check_hisat2 || install_hisat2 || log_error "HISAT2 installation failed"
-        # Setup Python environment (system or conda) for HISAT2 and future tools
-        echo ""
-        setup_python_environment || log_warning "Python environment setup incomplete"
-    else
-        log_info "Skipping HISAT2"
+        check_hisat2 && log_success "HISAT2 already installed" || install_hisat2 && log_success "HISAT2 installed"
+        setup_python_environment
     fi
     
-    echo ""
+    [ "$INSTALL_SAMTOOLS" = "yes" ] && { check_samtools && log_success "samtools already installed" || install_samtools; }
     
-    if [ "$INSTALL_SAMTOOLS" = "yes" ]; then
-        check_samtools || install_samtools || log_warning "samtools issues"
-    fi
-    
-    # Download reference
     if [ -z "$DOWNLOAD_REFERENCE" ]; then
         echo ""
-        read -p "Download reference genome (GRCh38 Ensembl 113)? [Y/n] " -n 1 -r
+        read -p "Download reference genome? [Y/n] " -n 1 -r
         echo
         DOWNLOAD_REFERENCE=$([[ ! $REPLY =~ ^[Nn]$ ]] && echo "yes" || echo "no")
     fi
     
-    if [ "$DOWNLOAD_REFERENCE" = "yes" ]; then
-        [ -z "$REFERENCE_DIR" ] && prompt_reference_directory
-        download_reference || log_warning "Reference incomplete"
-    else
-        REFERENCE_DIR="${DEFAULT_REFERENCE_DIR}"
-    fi
+    [ "$DOWNLOAD_REFERENCE" = "yes" ] && { [ -z "$REFERENCE_DIR" ] && prompt_reference_directory; download_reference; } || REFERENCE_DIR="${DEFAULT_REFERENCE_DIR}"
     
-    # Finalize
-    echo ""
     update_path
     save_config
     
@@ -632,82 +440,35 @@ main() {
     echo ""
     log_success "Installation successful!"
     echo ""
-    log_info "Installed tools:"
     [ "$INSTALL_STAR" = "yes" ] && echo "  ✓ STAR ${STAR_VERSION}"
     [ "$INSTALL_HISAT2" = "yes" ] && echo "  ✓ HISAT2 ${HISAT2_VERSION}"
-    [ "$INSTALL_SAMTOOLS" = "yes" ] && echo "  ✓ samtools"
-    if [ "$USE_SYSTEM_PYTHON" = "yes" ]; then
-        echo "  ✓ Python (system: $PYTHON_BIN)"
-    else
-        echo "  ✓ Python ${PYTHON_VERSION} (conda env: $CONDA_ENV_NAME)"
-    fi
-    echo ""
-    log_info "Paths:"
-    log_info "  Tools: ${INSTALL_BASE_DIR}"
-    [ "$DOWNLOAD_REFERENCE" = "yes" ] && log_info "  Reference: ${REFERENCE_DIR}"
-    [ "$USE_SYSTEM_PYTHON" = "no" ] && log_info "  Conda: ${CONDA_DIR}"
+    [ "$USE_SYSTEM_PYTHON" = "yes" ] && echo "  ✓ Python (system: $PYTHON_BIN)" || echo "  ✓ Python (conda: $CONDA_ENV_NAME)"
     echo ""
     log_warning "Restart terminal or run: source ~/.bashrc"
     echo ""
-    log_info "Next: ./run_alignment.sh -i qc_results/trimmed/PE/ -o alignment_results/ --aligner [star|hisat2]"
-    echo ""
 }
 
-# Parse arguments BEFORE calling main
+# Parse arguments
 while [[ $# -gt 0 ]]; do
     case $1 in
         --install-dir)
             INSTALL_BASE_DIR="$2"
             INSTALL_BASE_DIR="${INSTALL_BASE_DIR/#\~/$HOME}"
-            INSTALL_BASE_DIR="${INSTALL_BASE_DIR%/}"
-            STAR_DIR="${INSTALL_BASE_DIR}/STAR"
-            HISAT2_DIR="${INSTALL_BASE_DIR}/HISAT2"
-            BIN_DIR="${INSTALL_BASE_DIR}/bin"
-            CONDA_DIR="${INSTALL_BASE_DIR}/miniconda"
-            mkdir -p "${INSTALL_BASE_DIR}" "${BIN_DIR}"
             shift 2 ;;
         --reference-dir)
             REFERENCE_DIR="$2"
-            REFERENCE_DIR="${REFERENCE_DIR/#\~/$HOME}"
-            REFERENCE_DIR="${REFERENCE_DIR%/}"
-            mkdir -p "${REFERENCE_DIR}"
             shift 2 ;;
         --aligner)
             case "$2" in
                 star) INSTALL_STAR="yes"; INSTALL_HISAT2="no" ;;
                 hisat2) INSTALL_STAR="no"; INSTALL_HISAT2="yes" ;;
                 both) INSTALL_STAR="yes"; INSTALL_HISAT2="yes" ;;
-                *) log_error "Invalid aligner: $2"; exit 1 ;;
             esac
             shift 2 ;;
         --download-reference) DOWNLOAD_REFERENCE="yes"; shift ;;
         --skip-reference) DOWNLOAD_REFERENCE="no"; shift ;;
-        -h|--help)
-            cat << EOF
-Usage: $0 [options]
-
-Options:
-  --install-dir <path>              Installation directory (default: ~/softwares)
-  --reference-dir <path>            Reference genome directory
-  --aligner <star|hisat2|both>      Which aligner(s) to install
-  --download-reference              Download reference genome
-  --skip-reference                  Skip reference download
-  -h, --help                        Show help
-
-Examples:
-  # Install only STAR
-  $0 --aligner star
-
-  # Install both, custom directory
-  $0 --install-dir ~/Desktop/pipeline/softwares --aligner both
-
-  # Install HISAT2 with reference
-  $0 --aligner hisat2 --download-reference
-EOF
-            exit 0 ;;
-        *)
-            log_error "Unknown option: $1"
-            exit 1 ;;
+        -h|--help) echo "Usage: $0 [--install-dir <path>] [--aligner star|hisat2|both] [--download-reference]"; exit 0 ;;
+        *) log_error "Unknown option: $1"; exit 1 ;;
     esac
 done
 
