@@ -623,61 +623,192 @@ align_hisat2_pe() {
     fi
 }
 
-# Process all samples in directory
+# Process all samples with intelligent pattern detection
 process_all_samples() {
-    log_info "Processing all samples in: $INPUT_DIR"
+    if [ "$PAIRED_END" = false ]; then
+        log_error "Single-end mode not yet implemented"
+        log_info "Currently only paired-end reads are supported"
+        exit 1
+    fi
     
-    if [ "$PAIRED_END" = true ]; then
-        local r1_files=$(find "$INPUT_DIR" -type f \( -name "*_R1*.fastq" -o -name "*_R1*.fq" -o -name "*_R1*.fastq.gz" -o -name "*_R1*.fq.gz" -o -name "*_1.fastq" -o -name "*_1.fq" -o -name "*_1.fastq.gz" -o -name "*_1.fq.gz" -o -name "*_paired.fastq" -o -name "*_paired.fq" \) | sort)
+    log_info "Scanning for paired-end samples in: $INPUT_DIR"
+    echo ""
+    
+    # Find ALL fastq files first to analyze naming patterns
+    local all_fastq_files=$(find "$INPUT_DIR" -type f \( -name "*.fastq" -o -name "*.fq" -o -name "*.fastq.gz" -o -name "*.fq.gz" \) | sort)
+    
+    if [ -z "$all_fastq_files" ]; then
+        log_error "No FASTQ files found in $INPUT_DIR"
+        exit 1
+    fi
+    
+    # Detect naming pattern from first file
+    local first_file=$(echo "$all_fastq_files" | head -n 1)
+    local detected_pattern=""
+    
+    if [[ "$first_file" =~ _R1_ ]]; then
+        detected_pattern="_R1_/_R2_"
+    elif [[ "$first_file" =~ _r1_ ]]; then
+        detected_pattern="_r1_/_r2_"
+    elif [[ "$first_file" =~ _1\. ]] || [[ "$first_file" =~ _1_ ]]; then
+        detected_pattern="_1/_2"
+    else
+        log_error "Unable to detect read pairing pattern"
+        log_info "Expected patterns: *_R1_*.fastq/*_R2_*.fastq, *_r1_*.fastq/*_r2_*.fastq, or *_1.fastq/*_2.fastq"
+        echo ""
+        log_info "Files found:"
+        echo "$all_fastq_files" | head -n 5
+        echo ""
+        log_error "Please rename your files to follow one of the expected patterns"
+        exit 1
+    fi
+    
+    # Display detection results
+    echo "========================================"
+    echo "  Pairing Pattern Detection"
+    echo "========================================"
+    log_success "Detected pattern: ${detected_pattern}"
+    echo ""
+    
+    # Find R1 files based on detected pattern
+    local r1_files=""
+    case "$detected_pattern" in
+        "_R1_/_R2_")
+            r1_files=$(find "$INPUT_DIR" -type f \( -name "*_R1_*.fastq" -o -name "*_R1_*.fq" -o -name "*_R1_*.fastq.gz" -o -name "*_R1_*.fq.gz" \) | sort)
+            ;;
+        "_r1_/_r2_")
+            r1_files=$(find "$INPUT_DIR" -type f \( -name "*_r1_*.fastq" -o -name "*_r1_*.fq" -o -name "*_r1_*.fastq.gz" -o -name "*_r1_*.fq.gz" \) | sort)
+            ;;
+        "_1/_2")
+            r1_files=$(find "$INPUT_DIR" -type f \( -name "*_1.fastq" -o -name "*_1.fq" -o -name "*_1.fastq.gz" -o -name "*_1.fq.gz" \) | sort)
+            ;;
+    esac
+    
+    if [ -z "$r1_files" ]; then
+        log_error "No R1 files found matching pattern: ${detected_pattern}"
+        exit 1
+    fi
+    
+    # Count total samples
+    local total_r1=$(echo "$r1_files" | wc -l)
+    local total_r2=$(echo "$all_fastq_files" | grep -E "(_R2_|_r2_|_2\.)" | wc -l)
+    
+    log_info "Found ${total_r1} R1 files and ${total_r2} R2 files"
+    echo ""
+    
+    # Show sample list preview
+    log_info "Sample preview (first 3):"
+    local count=0
+    for r1_file in $r1_files; do
+        count=$((count + 1))
+        if [ $count -le 3 ]; then
+            local basename=$(basename "$r1_file")
+            local sample_id=$(echo "$basename" | sed -E 's/_(R1|r1|1).*//g')
+            local r2_file=$(find_r2_file "$r1_file")
+            
+            echo "  Sample ${count}: ${sample_id}"
+            echo "    R1: $(basename $r1_file)"
+            if [ -f "$r2_file" ]; then
+                echo "    R2: $(basename $r2_file) ✓"
+            else
+                echo "    R2: NOT FOUND ✗"
+            fi
+        fi
+    done
+    
+    echo ""
+    echo "========================================"
+    echo ""
+    
+    # Confirmation prompt with timeout
+    log_warning "Please verify the detected pattern is correct"
+    echo ""
+    echo "If the pattern detection is INCORRECT:"
+    echo "  1. Press Ctrl+C to abort"
+    echo "  2. Rename your files to follow the expected pattern"
+    echo "  3. Re-run this script"
+    echo ""
+    echo "Expected naming:"
+    echo "  - Pattern: SampleID_R1_*.fastq / SampleID_R2_*.fastq"
+    echo "  - Example: SRR1045522_R1_paired.fastq / SRR1045522_R2_paired.fastq"
+    echo ""
+    
+    # Auto-continue after timeout
+    local continue_timeout=10
+    echo -ne "Continue with detected pattern? [Y/n] (auto-continue in ${continue_timeout}s): "
+    read -t $continue_timeout -n 1 -r REPLY || true
+    echo
+    
+    if [ -z "$REPLY" ]; then
+        REPLY="y"
+        log_info "Auto-continuing after ${continue_timeout}s timeout"
+    fi
+    
+    if [[ $REPLY =~ ^[Nn]$ ]]; then
+        log_info "Alignment cancelled by user"
+        echo ""
+        log_info "To fix naming issues:"
+        echo "  1. Ensure R1 files contain: _R1_ (uppercase) or _r1_ (lowercase)"
+        echo "  2. Ensure R2 files contain: _R2_ (uppercase) or _r2_ (lowercase)"
+        echo "  3. Alternative: Use _1.fastq / _2.fastq naming"
+        exit 0
+    fi
+    
+    echo ""
+    log_info "Starting alignment for ${total_r1} samples..."
+    echo ""
+    
+    # Process each sample
+    local processed_count=0
+    local failed_count=0
+    
+    for r1_file in $r1_files; do
+        local basename=$(basename "$r1_file")
+        local sample_id=$(echo "$basename" | sed -E 's/_(R1|r1|1).*//g')
+        local r2_file=$(find_r2_file "$r1_file")
         
-        if [ -z "$r1_files" ]; then
-            log_error "No paired-end FASTQ files found in $INPUT_DIR"
-            exit 1
+        if [ ! -f "$r2_file" ]; then
+            log_warning "R2 not found for $sample_id, skipping..."
+            log_warning "Expected: $r2_file"
+            failed_count=$((failed_count + 1))
+            continue
         fi
         
-        local sample_count=0
+        processed_count=$((processed_count + 1))
         
-        for r1_file in $r1_files; do
-            sample_count=$((sample_count + 1))
-            
-            local basename=$(basename "$r1_file")
-            local sample_id=$(echo "$basename" | sed -E 's/_(R1|r1|1|paired).*//g')
-            
-            local r2_file=$(find_r2_file "$r1_file")
-            local pattern=$(detect_pattern "$r1_file")
-            
-            if [ ! -f "$r2_file" ]; then
-                log_warning "R2 not found for $r1_file (pattern: ${pattern}), skipping..."
-                continue
-            fi
-            
-            echo ""
-            log_info "========================================="
-            log_info "Sample ${sample_count}: ${sample_id}"
-            log_info "========================================="
-            log_info "Pattern: ${pattern}"
-            log_info "R1: $r1_file"
-            log_info "R2: $r2_file"
-            
-            # Align based on selected aligner(s)
-            case "$ALIGNER" in
-                star)
-                    align_star_pe "$sample_id" "$r1_file" "$r2_file" ""
-                    ;;
-                hisat2)
-                    align_hisat2_pe "$sample_id" "$r1_file" "$r2_file" ""
-                    ;;
-                both)
-                    log_info "Running alignment with BOTH aligners..."
-                    align_star_pe "$sample_id" "$r1_file" "$r2_file" "STAR"
-                    align_hisat2_pe "$sample_id" "$r1_file" "$r2_file" "HISAT2"
-                    ;;
-            esac
-        done
+        echo ""
+        log_info "========================================="
+        log_info "Sample ${processed_count}/${total_r1}: ${sample_id}"
+        log_info "========================================="
+        log_info "Pattern: ${detected_pattern}"
+        log_info "R1: $(basename $r1_file)"
+        log_info "R2: $(basename $r2_file)"
+        echo ""
         
-        log_success "Processed ${sample_count} samples"
-    else
-        log_error "Single-end alignment not yet implemented"
+        case "$ALIGNER" in
+            star)
+                align_star_pe "$sample_id" "$r1_file" "$r2_file" "" || failed_count=$((failed_count + 1))
+                ;;
+            hisat2)
+                align_hisat2_pe "$sample_id" "$r1_file" "$r2_file" "" || failed_count=$((failed_count + 1))
+                ;;
+            both)
+                log_info "Running alignment with BOTH aligners..."
+                align_star_pe "$sample_id" "$r1_file" "$r2_file" "STAR" || failed_count=$((failed_count + 1))
+                align_hisat2_pe "$sample_id" "$r1_file" "$r2_file" "HISAT2" || failed_count=$((failed_count + 1))
+                ;;
+        esac
+    done
+    
+    echo ""
+    log_success "Processed ${processed_count} of ${total_r1} samples"
+    
+    if [ $failed_count -gt 0 ]; then
+        log_warning "${failed_count} samples skipped or failed"
+    fi
+    
+    if [ $processed_count -eq 0 ]; then
+        log_error "No valid sample pairs found and processed"
         exit 1
     fi
 }
