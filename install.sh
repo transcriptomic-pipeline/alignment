@@ -115,7 +115,7 @@ check_qc_module() {
     if [ -f "$QC_CONFIG" ]; then
         log_info "QC module detected"
         if [ -z "$INSTALL_BASE_DIR" ]; then
-            source "$QC_CONFIG"
+            source "$QC_CONFIG" 2>/dev/null || true
             if [ -n "$INSTALL_BASE_DIR" ]; then
                 log_info "Using QC module installation directory: $INSTALL_BASE_DIR"
             fi
@@ -213,7 +213,7 @@ install_star() {
     mkdir -p "${STAR_DIR}"
     
     local STAR_BINARY=$(find . -name "STAR" -type f -executable 2>/dev/null | grep "Linux_x86_64" | head -n 1)
-    [ -z "$STAR_BINARY" ] && return 1
+    [ -z "$STAR_BINARY" ] && { log_error "STAR binary not found"; return 1; }
     
     cp "$STAR_BINARY" "${STAR_DIR}/"
     ln -sf "${STAR_DIR}/STAR" "${BIN_DIR}/STAR"
@@ -233,7 +233,7 @@ install_hisat2() {
     unzip -q "hisat2.zip"
     
     local HISAT2_EXTRACTED=$(find . -maxdepth 1 -type d -name "hisat2-${HISAT2_VERSION}*" 2>/dev/null | head -n 1)
-    [ -z "$HISAT2_EXTRACTED" ] && return 1
+    [ -z "$HISAT2_EXTRACTED" ] && { log_error "HISAT2 directory not found"; return 1; }
     
     mkdir -p "${HISAT2_DIR}"
     cp -r "$HISAT2_EXTRACTED/"* "${HISAT2_DIR}/"
@@ -267,13 +267,14 @@ setup_python_environment() {
     
     # Initialize conda
     export PATH="$CONDA_DIR/bin:$PATH"
-    [ ! -f "${CONDA_DIR}/etc/profile.d/conda.sh" ] && return 1
+    [ ! -f "${CONDA_DIR}/etc/profile.d/conda.sh" ] && { log_error "Conda profile not found"; return 1; }
     source "${CONDA_DIR}/etc/profile.d/conda.sh"
     
     # Create environment
     if ! conda env list | grep -qw "^${CONDA_ENV_NAME}"; then
         log_info "Creating conda environment '$CONDA_ENV_NAME'..."
         conda create -y -n "$CONDA_ENV_NAME" python="$PYTHON_VERSION" 2>&1 | grep -E "(Collecting|Solving|done)" || true
+        log_success "Environment created"
     fi
     
     # Verify activation
@@ -323,6 +324,7 @@ check_dependencies() {
                 sudo yum install -y wget unzip gzip ;;
         esac
     fi
+    log_success "Dependencies ready"
 }
 
 download_reference() {
@@ -330,13 +332,17 @@ download_reference() {
     cd "${REFERENCE_DIR}"
     
     if [ ! -f "Homo_sapiens.GRCh38.dna.primary_assembly.fa" ]; then
+        log_info "Downloading FASTA..."
         wget -q --show-progress "${REFERENCE_FASTA_URL}" -O Homo_sapiens.GRCh38.dna.primary_assembly.fa.gz
         gunzip -f Homo_sapiens.GRCh38.dna.primary_assembly.fa.gz
+        log_success "FASTA downloaded"
     fi
     
     if [ ! -f "Homo_sapiens.GRCh38.113.gtf" ]; then
+        log_info "Downloading GTF..."
         wget -q --show-progress "${REFERENCE_GTF_URL}" -O Homo_sapiens.GRCh38.113.gtf.gz
         gunzip -f Homo_sapiens.GRCh38.113.gtf.gz
+        log_success "GTF downloaded"
     fi
 }
 
@@ -352,6 +358,7 @@ update_path() {
         echo "export PATH=\"${CONDA_DIR}/bin:\$PATH\"" >> "$SHELL_RC"
     fi
     export PATH="${BIN_DIR}:$PATH"
+    log_success "PATH updated"
 }
 
 save_config() {
@@ -388,6 +395,7 @@ STAR_INDEX_DIR="${REFERENCE_DIR}/STAR_index"
 HISAT2_INDEX_DIR="${REFERENCE_DIR}/HISAT2_index"
 HISAT2_INDEX_PREFIX="${REFERENCE_DIR}/HISAT2_index/genome"
 EOF
+    log_success "Configuration saved"
 }
 
 main() {
@@ -398,13 +406,16 @@ main() {
     
     check_qc_module
     
-    [ -z "$INSTALL_BASE_DIR" ] && prompt_install_directory || {
+    if [ -z "$INSTALL_BASE_DIR" ]; then
+        prompt_install_directory
+    else
         STAR_DIR="${INSTALL_BASE_DIR}/STAR"
         HISAT2_DIR="${INSTALL_BASE_DIR}/HISAT2"
         BIN_DIR="${INSTALL_BASE_DIR}/bin"
         CONDA_DIR="${INSTALL_BASE_DIR}/miniconda"
         mkdir -p "${INSTALL_BASE_DIR}" "${BIN_DIR}"
-    }
+        log_info "Using installation directory: $INSTALL_BASE_DIR"
+    fi
     
     [ -z "$INSTALL_STAR" ] && [ -z "$INSTALL_HISAT2" ] && prompt_aligner_choice
     [ -z "$INSTALL_SAMTOOLS" ] && INSTALL_SAMTOOLS="yes"
@@ -412,11 +423,13 @@ main() {
     check_dependencies
     
     echo ""
-    [ "$INSTALL_STAR" = "yes" ] && { check_star && log_success "STAR already installed" || install_star && log_success "STAR installed"; }
+    if [ "$INSTALL_STAR" = "yes" ]; then
+        check_star && log_success "STAR already installed" || { install_star && log_success "STAR installed" || log_error "STAR install failed"; }
+    fi
     
     if [ "$INSTALL_HISAT2" = "yes" ]; then
-        check_hisat2 && log_success "HISAT2 already installed" || install_hisat2 && log_success "HISAT2 installed"
-        setup_python_environment
+        check_hisat2 && log_success "HISAT2 already installed" || { install_hisat2 && log_success "HISAT2 installed" || log_error "HISAT2 install failed"; }
+        setup_python_environment || log_warning "Python setup incomplete"
     fi
     
     [ "$INSTALL_SAMTOOLS" = "yes" ] && { check_samtools && log_success "samtools already installed" || install_samtools; }
@@ -428,7 +441,12 @@ main() {
         DOWNLOAD_REFERENCE=$([[ ! $REPLY =~ ^[Nn]$ ]] && echo "yes" || echo "no")
     fi
     
-    [ "$DOWNLOAD_REFERENCE" = "yes" ] && { [ -z "$REFERENCE_DIR" ] && prompt_reference_directory; download_reference; } || REFERENCE_DIR="${DEFAULT_REFERENCE_DIR}"
+    if [ "$DOWNLOAD_REFERENCE" = "yes" ]; then
+        [ -z "$REFERENCE_DIR" ] && prompt_reference_directory
+        download_reference
+    else
+        REFERENCE_DIR="${DEFAULT_REFERENCE_DIR}"
+    fi
     
     update_path
     save_config
@@ -444,6 +462,9 @@ main() {
     [ "$INSTALL_HISAT2" = "yes" ] && echo "  ✓ HISAT2 ${HISAT2_VERSION}"
     [ "$USE_SYSTEM_PYTHON" = "yes" ] && echo "  ✓ Python (system: $PYTHON_BIN)" || echo "  ✓ Python (conda: $CONDA_ENV_NAME)"
     echo ""
+    log_info "Tools: ${INSTALL_BASE_DIR}"
+    [ "$DOWNLOAD_REFERENCE" = "yes" ] && log_info "Reference: ${REFERENCE_DIR}"
+    echo ""
     log_warning "Restart terminal or run: source ~/.bashrc"
     echo ""
 }
@@ -454,20 +475,26 @@ while [[ $# -gt 0 ]]; do
         --install-dir)
             INSTALL_BASE_DIR="$2"
             INSTALL_BASE_DIR="${INSTALL_BASE_DIR/#\~/$HOME}"
+            INSTALL_BASE_DIR="${INSTALL_BASE_DIR%/}"
             shift 2 ;;
         --reference-dir)
             REFERENCE_DIR="$2"
+            REFERENCE_DIR="${REFERENCE_DIR/#\~/$HOME}"
+            REFERENCE_DIR="${REFERENCE_DIR%/}"
             shift 2 ;;
         --aligner)
             case "$2" in
                 star) INSTALL_STAR="yes"; INSTALL_HISAT2="no" ;;
                 hisat2) INSTALL_STAR="no"; INSTALL_HISAT2="yes" ;;
                 both) INSTALL_STAR="yes"; INSTALL_HISAT2="yes" ;;
+                *) log_error "Invalid aligner: $2"; exit 1 ;;
             esac
             shift 2 ;;
         --download-reference) DOWNLOAD_REFERENCE="yes"; shift ;;
         --skip-reference) DOWNLOAD_REFERENCE="no"; shift ;;
-        -h|--help) echo "Usage: $0 [--install-dir <path>] [--aligner star|hisat2|both] [--download-reference]"; exit 0 ;;
+        -h|--help)
+            echo "Usage: $0 [--install-dir <path>] [--aligner star|hisat2|both] [--download-reference]"
+            exit 0 ;;
         *) log_error "Unknown option: $1"; exit 1 ;;
     esac
 done
