@@ -87,9 +87,6 @@ Examples:
     # Use BOTH aligners (for comparison)
     $0 -i qc_results/trimmed/PE -o alignment_results --aligner both -t 20
 
-    # Process specific samples with STAR
-    $0 -i trimmed/ -o aligned/ --aligner star -s samples.txt -t 20
-
 Integration with QC Module:
     # Direct from QC output
     $0 -i qc_results/trimmed/PE -o alignment_results --aligner star
@@ -100,10 +97,12 @@ EOF
 
 command_exists() { command -v "$1" >/dev/null 2>&1; }
 
-# Check if conda environment exists (should be installed by install.sh)
+# Check if conda environment exists and is properly set up
 check_conda_env() {
+    log_info "Checking conda environment for HISAT2..."
+    
     if [ -z "$CONDA_DIR" ] || [ ! -d "$CONDA_DIR" ]; then
-        log_error "Conda environment not found for HISAT2"
+        log_error "Conda directory not found: $CONDA_DIR"
         log_error "Please run: ./install.sh --aligner hisat2"
         exit 1
     fi
@@ -114,13 +113,26 @@ check_conda_env() {
         exit 1
     fi
     
-    if ! "$CONDA_DIR/bin/conda" env list | grep -q "$CONDA_ENV_NAME"; then
+    # Initialize conda in this shell session
+    if [ ! -f "${CONDA_DIR}/etc/profile.d/conda.sh" ]; then
+        log_error "Conda profile script not found at: ${CONDA_DIR}/etc/profile.d/conda.sh"
+        log_error "Please reinstall: ./install.sh --aligner hisat2"
+        exit 1
+    fi
+    
+    # Source conda profile
+    source "${CONDA_DIR}/etc/profile.d/conda.sh"
+    
+    # Check if environment exists
+    if ! conda env list | grep -q "^${CONDA_ENV_NAME} "; then
         log_error "Conda environment '$CONDA_ENV_NAME' not found"
+        log_error "Available environments:"
+        conda env list
         log_error "Please run: ./install.sh --aligner hisat2"
         exit 1
     fi
     
-    log_info "Using conda environment: $CONDA_ENV_NAME"
+    log_success "Conda environment '$CONDA_ENV_NAME' is available"
 }
 
 # Check installation
@@ -266,6 +278,9 @@ verify_aligner() {
             exit 1
         fi
         log_success "HISAT2 is available"
+        
+        # Check conda environment for HISAT2
+        check_conda_env
     fi
 }
 
@@ -381,7 +396,7 @@ build_star_index() {
     fi
 }
 
-# Build HISAT2 index with AUTO-CONTINUE (uses pre-installed conda env)
+# Build HISAT2 index with AUTO-CONTINUE and proper conda activation
 build_hisat2_index() {
     log_info "Building HISAT2 genome index..."
     log_warning "This may take 30-45 minutes and requires ~8 GB RAM"
@@ -403,15 +418,25 @@ build_hisat2_index() {
     
     mkdir -p "$HISAT2_INDEX_DIR"
     
-    # Check conda environment (should be pre-installed)
-    check_conda_env
+    log_info "Activating conda environment for HISAT2 index build..."
     
-    log_info "Running HISAT2 genome index build in conda environment..."
-    
-    # Activate conda environment and run hisat2-build
+    # Properly source and activate conda environment
     set +u  # Temporarily disable unset variable check for conda
-    source "$CONDA_DIR/etc/profile.d/conda.sh"
-    conda activate "$CONDA_ENV_NAME"
+    
+    if [ ! -f "${CONDA_DIR}/etc/profile.d/conda.sh" ]; then
+        log_error "Conda profile script not found"
+        exit 1
+    fi
+    
+    source "${CONDA_DIR}/etc/profile.d/conda.sh"
+    
+    if ! conda activate "$CONDA_ENV_NAME" 2>/dev/null; then
+        log_error "Failed to activate conda environment: $CONDA_ENV_NAME"
+        log_error "Please run: ./install.sh --aligner hisat2"
+        exit 1
+    fi
+    
+    log_info "Running HISAT2 genome index build in conda environment '$CONDA_ENV_NAME'..."
     
     "$HISAT2_BUILD_BIN" \
         -f "$REFERENCE_GENOME" \
