@@ -29,6 +29,7 @@ REFERENCE_DIR=""
 STAR_DIR=""
 HISAT2_DIR=""
 BIN_DIR=""
+CONDA_DIR=""
 
 # Python detection
 USE_SYSTEM_PYTHON="no"
@@ -62,34 +63,38 @@ check_system_python() {
     log_info "Checking for system Python 3..."
     
     if command_exists python3; then
-        local PY_VERSION=$(python3 --version 2>&1 | grep -oP '\d+\.\d+' | head -1)
-        local MAJOR=$(echo "$PY_VERSION" | cut -d. -f1)
-        local MINOR=$(echo "$PY_VERSION" | cut -d. -f2)
-        
-        if [ "$MAJOR" -ge 3 ] && [ "$MINOR" -ge 6 ]; then
-            PYTHON_BIN=$(command -v python3)
-            USE_SYSTEM_PYTHON="yes"
-            log_success "System Python 3 found: $(python3 --version)"
-            log_info "Using system Python: $PYTHON_BIN"
-            return 0
+        local PYTHON_VERSION_OUTPUT=$(python3 --version 2>&1)
+        if [[ "$PYTHON_VERSION_OUTPUT" =~ Python\ ([0-9]+)\.([0-9]+) ]]; then
+            local MAJOR="${BASH_REMATCH[1]}"
+            local MINOR="${BASH_REMATCH[2]}"
+            
+            if [ "$MAJOR" -eq 3 ] && [ "$MINOR" -ge 6 ]; then
+                PYTHON_BIN=$(command -v python3)
+                USE_SYSTEM_PYTHON="yes"
+                log_success "System Python 3 found: $PYTHON_VERSION_OUTPUT"
+                log_info "Using system Python: $PYTHON_BIN"
+                return 0
+            fi
         fi
     fi
     
     if command_exists python; then
-        local PY_VERSION=$(python --version 2>&1 | grep -oP '\d+\.\d+' | head -1)
-        local MAJOR=$(echo "$PY_VERSION" | cut -d. -f1)
-        
-        if [ "$MAJOR" -ge 3 ]; then
-            PYTHON_BIN=$(command -v python)
-            USE_SYSTEM_PYTHON="yes"
-            log_success "System Python 3 found: $(python --version)"
-            log_info "Using system Python: $PYTHON_BIN"
-            return 0
+        local PYTHON_VERSION_OUTPUT=$(python --version 2>&1)
+        if [[ "$PYTHON_VERSION_OUTPUT" =~ Python\ ([0-9]+)\.([0-9]+) ]]; then
+            local MAJOR="${BASH_REMATCH[1]}"
+            local MINOR="${BASH_REMATCH[2]}"
+            
+            if [ "$MAJOR" -eq 3 ] && [ "$MINOR" -ge 6 ]; then
+                PYTHON_BIN=$(command -v python)
+                USE_SYSTEM_PYTHON="yes"
+                log_success "System Python 3 found: $PYTHON_VERSION_OUTPUT"
+                log_info "Using system Python: $PYTHON_BIN"
+                return 0
+            fi
         fi
     fi
     
     log_warning "No suitable system Python 3 found (requires >= 3.6)"
-    log_info "HISAT2 can still be used (it doesn't strictly require Python)"
     USE_SYSTEM_PYTHON="no"
     PYTHON_BIN=""
     return 1
@@ -123,6 +128,7 @@ prompt_install_directory() {
     STAR_DIR="${INSTALL_BASE_DIR}/STAR"
     HISAT2_DIR="${INSTALL_BASE_DIR}/HISAT2"
     BIN_DIR="${INSTALL_BASE_DIR}/bin"
+    CONDA_DIR="${INSTALL_BASE_DIR}/miniconda"
     
     mkdir -p "${INSTALL_BASE_DIR}" "${BIN_DIR}"
     log_success "Installation directory: ${INSTALL_BASE_DIR}"
@@ -274,6 +280,11 @@ update_path() {
     echo "" >> "$SHELL_RC"
     echo "# Alignment Module" >> "$SHELL_RC"
     echo "export PATH=\"${BIN_DIR}:\$PATH\"" >> "$SHELL_RC"
+    
+    if [ "$USE_SYSTEM_PYTHON" = "no" ] && [ -d "$CONDA_DIR" ]; then
+        echo "export PATH=\"${CONDA_DIR}/bin:\$PATH\"" >> "$SHELL_RC"
+    fi
+    
     export PATH="${BIN_DIR}:$PATH"
 }
 
@@ -295,6 +306,7 @@ SAMTOOLS_BIN="$(command -v samtools 2>/dev/null || echo '')"
 # Python configuration
 USE_SYSTEM_PYTHON="${USE_SYSTEM_PYTHON}"
 PYTHON_BIN="${PYTHON_BIN}"
+CONDA_DIR="${CONDA_DIR}"
 EOF
     
     cat > "${SCRIPT_DIR}/config/reference_paths.conf" << EOF
@@ -305,6 +317,8 @@ STAR_INDEX_DIR="${REFERENCE_DIR}/STAR_index"
 HISAT2_INDEX_DIR="${REFERENCE_DIR}/HISAT2_index"
 HISAT2_INDEX_PREFIX="${REFERENCE_DIR}/HISAT2_index/genome"
 EOF
+    
+    log_success "Configuration saved"
 }
 
 main() {
@@ -313,7 +327,7 @@ main() {
     echo "========================================"
     echo ""
     
-    # Check for Python first
+    # Check system Python FIRST
     check_system_python
     
     if [ -z "$INSTALL_BASE_DIR" ]; then
@@ -322,6 +336,7 @@ main() {
         STAR_DIR="${INSTALL_BASE_DIR}/STAR"
         HISAT2_DIR="${INSTALL_BASE_DIR}/HISAT2"
         BIN_DIR="${INSTALL_BASE_DIR}/bin"
+        CONDA_DIR="${INSTALL_BASE_DIR}/miniconda"
         mkdir -p "${INSTALL_BASE_DIR}" "${BIN_DIR}"
     fi
     
@@ -361,7 +376,13 @@ main() {
     echo ""
     [ "$INSTALL_STAR" = "yes" ] && echo "  ✓ STAR ${STAR_VERSION}"
     [ "$INSTALL_HISAT2" = "yes" ] && echo "  ✓ HISAT2 ${HISAT2_VERSION}"
-    [ "$USE_SYSTEM_PYTHON" = "yes" ] && echo "  ✓ Python (system: $PYTHON_BIN)"
+    
+    if [ "$USE_SYSTEM_PYTHON" = "yes" ]; then
+        echo "  ✓ Python (system: $PYTHON_BIN)"
+    else
+        echo "  ✓ Python (conda will be used if needed)"
+    fi
+    
     echo ""
     log_warning "Restart terminal or run: source ~/.bashrc"
     echo ""
