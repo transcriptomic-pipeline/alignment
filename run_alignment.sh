@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # Alignment Module - Main Execution Script
-# Supports STAR and HISAT2 without Python dependency issues
+# Supports STAR and HISAT2 with system Python (no conda dependency if system Python exists)
 
 set -euo pipefail
 
@@ -30,7 +30,7 @@ REFERENCE_GENOME=""
 REFERENCE_GTF=""
 PAIRED_END=true
 
-# Tool paths
+# Tool paths (loaded from config)
 STAR_BIN=""
 HISAT2_BIN=""
 HISAT2_BUILD_BIN=""
@@ -39,10 +39,12 @@ STAR_INDEX_DIR=""
 HISAT2_INDEX_DIR=""
 HISAT2_INDEX_PREFIX=""
 
-# Python settings from config
+# Python configuration (loaded from config)
 USE_SYSTEM_PYTHON=""
 PYTHON_BIN=""
+CONDA_DIR=""
 
+# Timeout for auto-continue prompts
 PROMPT_TIMEOUT=30
 
 usage() {
@@ -63,8 +65,16 @@ Optional:
     -h, --help          Show this help
 
 Examples:
+    # Interactive mode
     $0 -i qc_results/trimmed/PE -o alignment_results
+
+    # Use STAR with 20 threads
     $0 -i qc_results/trimmed/PE -o alignment_results --aligner star -t 20
+
+    # Use HISAT2
+    $0 -i qc_results/trimmed/PE -o alignment_results --aligner hisat2
+
+    # Use both aligners for comparison
     $0 -i qc_results/trimmed/PE -o alignment_results --aligner both
 
 EOF
@@ -73,36 +83,72 @@ EOF
 
 command_exists() { command -v "$1" >/dev/null 2>&1; }
 
-check_installation() {
-    log_info "Checking for installed tools..."
+# Load configuration (with fallback for running from any directory)
+load_configuration() {
+    log_info "Loading configuration..."
     
-    if [ ! -f "$CONFIG_FILE" ]; then
-        log_warning "Configuration not found. Running from outside alignment directory or not installed yet."
-        
-        # Try to find config in common locations
-        if [ -f "${HOME}/softwares/alignment/config/install_paths.conf" ]; then
-            CONFIG_FILE="${HOME}/softwares/alignment/config/install_paths.conf"
-            REF_CONFIG="${HOME}/softwares/alignment/config/reference_paths.conf"
-            log_info "Found configuration at: $CONFIG_FILE"
-        else
-            log_error "Configuration not found. Please run: ./install.sh"
-            exit 1
+    # Try to find config in script directory
+    if [ -f "$CONFIG_FILE" ]; then
+        source "$CONFIG_FILE"
+        [ -f "$REF_CONFIG" ] && source "$REF_CONFIG"
+        log_success "Configuration loaded from: $CONFIG_FILE"
+        return 0
+    fi
+    
+    # Try to find config in standard locations
+    local POSSIBLE_CONFIGS=(
+        "${HOME}/Desktop/pipeline/softwares/alignment/config/install_paths.conf"
+        "${HOME}/softwares/alignment/config/install_paths.conf"
+        "${HOME}/alignment/config/install_paths.conf"
+    )
+    
+    for cfg in "${POSSIBLE_CONFIGS[@]}"; do
+        if [ -f "$cfg" ]; then
+            source "$cfg"
+            local ref_cfg="${cfg/install_paths.conf/reference_paths.conf}"
+            [ -f "$ref_cfg" ] && source "$ref_cfg"
+            log_success "Configuration loaded from: $cfg"
+            return 0
         fi
-    fi
+    done
     
-    source "$CONFIG_FILE"
-    [ -f "$REF_CONFIG" ] && source "$REF_CONFIG"
-    
-    log_success "Configuration loaded"
-    
-    # Log Python configuration (informational only - no conda enforcement)
-    if [ "$USE_SYSTEM_PYTHON" = "yes" ]; then
-        log_info "Python: System ($PYTHON_BIN)"
-    else
-        log_info "Python: Not configured (not required for alignment)"
-    fi
+    log_error "Configuration not found. Please run: ./install.sh"
+    log_info "Or specify the alignment module directory"
+    exit 1
 }
 
+# Verify aligner is available
+verify_aligner_availability() {
+    case "$ALIGNER" in
+        star)
+            if [ "$STAR_INSTALLED" != "yes" ] || [ ! -f "$STAR_BIN" ]; then
+                log_error "STAR not installed. Run: ./install.sh --aligner star"
+                exit 1
+            fi
+            log_success "STAR is available"
+            ;;
+        hisat2)
+            if [ "$HISAT2_INSTALLED" != "yes" ] || [ ! -f "$HISAT2_BIN" ]; then
+                log_error "HISAT2 not installed. Run: ./install.sh --aligner hisat2"
+                exit 1
+            fi
+            log_success "HISAT2 is available"
+            ;;
+        both)
+            if [ "$STAR_INSTALLED" != "yes" ] || [ ! -f "$STAR_BIN" ]; then
+                log_error "STAR not installed. Run: ./install.sh --aligner both"
+                exit 1
+            fi
+            if [ "$HISAT2_INSTALLED" != "yes" ] || [ ! -f "$HISAT2_BIN" ]; then
+                log_error "HISAT2 not installed. Run: ./install.sh --aligner both"
+                exit 1
+            fi
+            log_success "Both STAR and HISAT2 are available"
+            ;;
+    esac
+}
+
+# Prompt for aligner selection
 prompt_aligner_selection() {
     echo ""
     echo "========================================"
@@ -116,9 +162,9 @@ prompt_aligner_selection() {
     if [ "$STAR_AVAILABLE" = "yes" ] && [ "$HISAT2_AVAILABLE" = "yes" ]; then
         log_info "Both STAR and HISAT2 are installed"
         echo ""
-        echo "  1) STAR (high memory ~32GB)"
-        echo "  2) HISAT2 (low memory ~8GB)"
-        echo "  3) BOTH (run with both aligners)"
+        echo "  1) STAR (high memory ~32GB, best for splice detection)"
+        echo "  2) HISAT2 (low memory ~8GB, faster)"
+        echo "  3) BOTH (run with both aligners for comparison)"
         echo ""
         read -p "Enter choice [1-3]: " ALIGNER_CHOICE
         
@@ -136,57 +182,29 @@ prompt_aligner_selection() {
         ALIGNER="hisat2"
     else
         log_error "No aligner installed"
+        log_info "Please run: ./install.sh"
         exit 1
     fi
     
     log_success "Selected aligner: ${ALIGNER^^}"
 }
 
-verify_aligner() {
-    log_info "Verifying aligner: ${ALIGNER^^}"
-    
-    case "$ALIGNER" in
-        star)
-            if [ "$STAR_INSTALLED" != "yes" ] || [ ! -f "$STAR_BIN" ]; then
-                log_error "STAR not installed"
-                exit 1
-            fi
-            log_success "STAR is available"
-            ;;
-        hisat2)
-            if [ "$HISAT2_INSTALLED" != "yes" ] || [ ! -f "$HISAT2_BIN" ]; then
-                log_error "HISAT2 not installed"
-                exit 1
-            fi
-            log_success "HISAT2 is available"
-            ;;
-        both)
-            if [ "$STAR_INSTALLED" != "yes" ] || [ ! -f "$STAR_BIN" ]; then
-                log_error "STAR not installed"
-                exit 1
-            fi
-            if [ "$HISAT2_INSTALLED" != "yes" ] || [ ! -f "$HISAT2_BIN" ]; then
-                log_error "HISAT2 not installed"
-                exit 1
-            fi
-            log_success "Both STAR and HISAT2 are available"
-            ;;
-    esac
-}
-
+# Check reference genome
 check_reference() {
     log_info "Checking reference genome..."
     
     [ -z "$REFERENCE_GENOME" ] && [ -n "$REFERENCE_FASTA" ] && [ -f "$REFERENCE_FASTA" ] && REFERENCE_GENOME="$REFERENCE_FASTA"
-    [ -z "$REFERENCE_GTF" ] && [ -n "${REFERENCE_DIR}" ] && [ -f "${REFERENCE_DIR}/Homo_sapiens.GRCh38.113.gtf" ] && REFERENCE_GTF="${REFERENCE_DIR}/Homo_sapiens.GRCh38.113.gtf"
+    [ -z "$REFERENCE_GTF" ] && [ -n "$REFERENCE_DIR" ] && [ -f "${REFERENCE_DIR}/Homo_sapiens.GRCh38.113.gtf" ] && REFERENCE_GTF="${REFERENCE_DIR}/Homo_sapiens.GRCh38.113.gtf"
     
     if [ ! -f "$REFERENCE_GENOME" ]; then
         log_error "Reference genome not found: $REFERENCE_GENOME"
+        log_info "Download with: ./install.sh --download-reference"
         exit 1
     fi
     
     if [ ! -f "$REFERENCE_GTF" ]; then
         log_error "Reference GTF not found: $REFERENCE_GTF"
+        log_info "Download with: ./install.sh --download-reference"
         exit 1
     fi
     
@@ -194,6 +212,7 @@ check_reference() {
     log_success "Reference GTF: $REFERENCE_GTF"
 }
 
+# Check or build index
 check_or_build_index() {
     case "$ALIGNER" in
         star) check_or_build_star_index ;;
@@ -212,7 +231,7 @@ check_or_build_star_index() {
         log_warning "STAR index not found"
         build_star_index
     else
-        log_success "STAR index found"
+        log_success "STAR index found: $STAR_INDEX_DIR"
     fi
 }
 
@@ -223,7 +242,7 @@ check_or_build_hisat2_index() {
         log_warning "HISAT2 index not found"
         build_hisat2_index
     else
-        log_success "HISAT2 index found"
+        log_success "HISAT2 index found: $HISAT2_INDEX_PREFIX"
     fi
 }
 
@@ -236,11 +255,12 @@ build_star_index() {
     echo
     
     if [[ $REPLY =~ ^[Nn]$ ]]; then
-        log_error "STAR index required"
+        log_error "STAR index required for alignment"
         exit 1
     fi
     
     mkdir -p "$STAR_INDEX_DIR"
+    log_info "Running STAR genome index build..."
     
     "$STAR_BIN" \
         --runThreadN "$THREADS" \
@@ -252,7 +272,7 @@ build_star_index() {
         2>&1 | tee "${SCRIPT_DIR}/star_index_build.log"
     
     if [ $? -eq 0 ]; then
-        log_success "STAR index built"
+        log_success "STAR index built successfully"
     else
         log_error "STAR index build failed"
         exit 1
@@ -268,18 +288,23 @@ build_hisat2_index() {
     echo
     
     if [[ $REPLY =~ ^[Nn]$ ]]; then
-        log_error "HISAT2 index required"
+        log_error "HISAT2 index required for alignment"
         exit 1
     fi
     
     mkdir -p "$HISAT2_INDEX_DIR"
     
-    # HISAT2 doesn't require Python for indexing
+    # NO CONDA DEPENDENCY - just run hisat2-build directly
+    # System Python is already available (verified by install.sh)
+    log_info "Building HISAT2 index (using system Python)..."
+    
     "$HISAT2_BUILD_BIN" -f "$REFERENCE_GENOME" -p "$THREADS" "$HISAT2_INDEX_PREFIX" \
         2>&1 | tee "${SCRIPT_DIR}/hisat2_index_build.log"
     
-    if [ $? -eq 0 ]; then
-        log_success "HISAT2 index built"
+    local STATUS=$?
+    
+    if [ $STATUS -eq 0 ]; then
+        log_success "HISAT2 index built successfully"
     else
         log_error "HISAT2 index build failed"
         exit 1
@@ -287,11 +312,12 @@ build_hisat2_index() {
 }
 
 create_output_dirs() {
-    log_info "Creating output directories..."
+    log_info "Creating output directory structure..."
     mkdir -p "${OUTPUT_DIR}/logs" "${OUTPUT_DIR}/temp"
     
     if [ "$ALIGNER" = "both" ]; then
         mkdir -p "${OUTPUT_DIR}/STAR" "${OUTPUT_DIR}/HISAT2"
+        log_info "Created subdirectories for STAR and HISAT2"
     fi
     
     log_success "Output directories created"
@@ -320,7 +346,7 @@ align_star_pe() {
     local r2_file=$3
     local subdir=$4
     
-    log_info "Aligning: ${sample_id} (STAR)"
+    log_info "Aligning sample: ${sample_id} (STAR)"
     
     local base_output="${OUTPUT_DIR}"
     [ -n "$subdir" ] && base_output="${OUTPUT_DIR}/${subdir}"
@@ -338,14 +364,16 @@ align_star_pe() {
         --outFileNamePrefix "$output_prefix" \
         --outFilterMultimapNmax 20 \
         --alignIntronMax 1000000 \
+        --alignMatesGapMax 1000000 \
         2>&1 | tee "${OUTPUT_DIR}/logs/${sample_id}_star.log"
     
     if [ -f "${output_prefix}Aligned.sortedByCoord.out.bam" ]; then
+        log_info "Indexing BAM file..."
         samtools index "${output_prefix}Aligned.sortedByCoord.out.bam"
-        log_success "STAR completed: ${sample_id}"
+        log_success "STAR alignment completed: ${sample_id}"
         return 0
     else
-        log_error "STAR failed: ${sample_id}"
+        log_error "STAR alignment failed: ${sample_id}"
         return 1
     fi
 }
@@ -356,7 +384,7 @@ align_hisat2_pe() {
     local r2_file=$3
     local subdir=$4
     
-    log_info "Aligning: ${sample_id} (HISAT2)"
+    log_info "Aligning sample: ${sample_id} (HISAT2)"
     
     local base_output="${OUTPUT_DIR}"
     [ -n "$subdir" ] && base_output="${OUTPUT_DIR}/${subdir}"
@@ -366,6 +394,7 @@ align_hisat2_pe() {
     local output_bam="${base_output}/${sample_id}/${sample_id}.bam"
     local output_sorted="${base_output}/${sample_id}/${sample_id}Aligned.sortedByCoord.out.bam"
     
+    # NO CONDA - just run hisat2 directly (system Python already available)
     "$HISAT2_BIN" \
         -q \
         -x "$HISAT2_INDEX_PREFIX" \
@@ -376,15 +405,16 @@ align_hisat2_pe() {
         2>&1 | tee "${OUTPUT_DIR}/logs/${sample_id}_hisat2.log"
     
     if [ $? -eq 0 ] && [ -f "$output_sam" ]; then
+        log_info "Converting and sorting BAM..."
         samtools view -bS "$output_sam" > "$output_bam"
         samtools sort "$output_bam" -o "$output_sorted"
         samtools index "$output_sorted"
         rm -f "$output_sam" "$output_bam"
         
-        log_success "HISAT2 completed: ${sample_id}"
+        log_success "HISAT2 alignment completed: ${sample_id}"
         return 0
     else
-        log_error "HISAT2 failed: ${sample_id}"
+        log_error "HISAT2 alignment failed: ${sample_id}"
         return 1
     fi
 }
@@ -401,6 +431,7 @@ process_all_samples() {
     
     if [ -z "$r1_files" ]; then
         log_error "No paired-end FASTQ files found in $INPUT_DIR"
+        log_info "Expected patterns: *_R1*.fastq, *_r1*.fastq, *_1.fastq (and .fq, .gz variants)"
         exit 1
     fi
     
@@ -423,7 +454,11 @@ process_all_samples() {
         processed_count=$((processed_count + 1))
         
         echo ""
+        log_info "========================================="
         log_info "Sample ${processed_count}: ${sample_id}"
+        log_info "========================================="
+        log_info "R1: $r1_file"
+        log_info "R2: $r2_file"
         
         case "$ALIGNER" in
             star)
@@ -433,6 +468,7 @@ process_all_samples() {
                 align_hisat2_pe "$sample_id" "$r1_file" "$r2_file" ""
                 ;;
             both)
+                log_info "Running alignment with BOTH aligners..."
                 align_star_pe "$sample_id" "$r1_file" "$r2_file" "STAR"
                 align_hisat2_pe "$sample_id" "$r1_file" "$r2_file" "HISAT2"
                 ;;
@@ -440,7 +476,7 @@ process_all_samples() {
     done
     
     if [ $processed_count -eq 0 ]; then
-        log_error "No valid sample pairs processed"
+        log_error "No valid sample pairs found and processed"
         exit 1
     fi
     
@@ -448,6 +484,8 @@ process_all_samples() {
 }
 
 generate_summary() {
+    log_info "Generating summary..."
+    
     local summary_file="${OUTPUT_DIR}/alignment_summary.txt"
     
     cat > "$summary_file" << EOF
@@ -455,16 +493,28 @@ generate_summary() {
 Alignment Module Summary
 ========================================
 Date: $(date)
-Input: ${INPUT_DIR}
-Output: ${OUTPUT_DIR}
+Input Directory: ${INPUT_DIR}
+Output Directory: ${OUTPUT_DIR}
+
 Aligner: ${ALIGNER^^}
 Reference: ${REFERENCE_GENOME}
 GTF: ${REFERENCE_GTF}
 Threads: ${THREADS}
+Python: ${USE_SYSTEM_PYTHON} (${PYTHON_BIN})
+
+Output Structure:
+$(if [ "$ALIGNER" = "both" ]; then
+    echo "  STAR results:   ${OUTPUT_DIR}/STAR/[sample]/"
+    echo "  HISAT2 results: ${OUTPUT_DIR}/HISAT2/[sample]/"
+else
+    echo "  Aligned BAM files: ${OUTPUT_DIR}/[sample]/"
+fi)
+  Logs: ${OUTPUT_DIR}/logs/
+
 ========================================
 EOF
     
-    log_success "Summary: $summary_file"
+    log_success "Summary saved: $summary_file"
 }
 
 display_final_summary() {
@@ -475,14 +525,21 @@ display_final_summary() {
     echo ""
     log_success "All alignments completed!"
     echo ""
+    log_info "Aligner(s) used: ${ALIGNER^^}"
     log_info "Results: ${OUTPUT_DIR}"
+    echo ""
     
     if [ "$ALIGNER" = "both" ]; then
-        echo "  STAR:   ${OUTPUT_DIR}/STAR/"
-        echo "  HISAT2: ${OUTPUT_DIR}/HISAT2/"
+        log_info "Output structure (BOTH aligners):"
+        echo "  STAR results:   ${OUTPUT_DIR}/STAR/[sample]/"
+        echo "  HISAT2 results: ${OUTPUT_DIR}/HISAT2/[sample]/"
+    else
+        log_info "Output structure:"
+        echo "  BAM files: ${OUTPUT_DIR}/[sample]/*Aligned.sortedByCoord.out.bam"
+        echo "  BAM index: ${OUTPUT_DIR}/[sample]/*Aligned.sortedByCoord.out.bam.bai"
     fi
     
-    echo "  Logs:   ${OUTPUT_DIR}/logs/"
+    echo "  Logs:      ${OUTPUT_DIR}/logs/"
     echo ""
     echo "========================================"
 }
@@ -494,21 +551,40 @@ parse_arguments() {
     
     while [[ $# -gt 0 ]]; do
         case $1 in
-            -i|--input) INPUT_DIR="$2"; shift 2 ;;
-            -o|--output) OUTPUT_DIR="$2"; shift 2 ;;
-            -s|--samples) SAMPLE_FILE="$2"; shift 2 ;;
-            -t|--threads) THREADS="$2"; shift 2 ;;
-            --aligner) ALIGNER="$2"; shift 2 ;;
-            --reference) REFERENCE_GENOME="$2"; shift 2 ;;
-            --gtf) REFERENCE_GTF="$2"; shift 2 ;;
-            --single-end) PAIRED_END=false; shift ;;
-            -h|--help) usage ;;
-            *) log_error "Unknown option: $1"; usage ;;
+            -i|--input)
+                INPUT_DIR="$2"
+                shift 2 ;;
+            -o|--output)
+                OUTPUT_DIR="$2"
+                shift 2 ;;
+            -s|--samples)
+                SAMPLE_FILE="$2"
+                shift 2 ;;
+            -t|--threads)
+                THREADS="$2"
+                shift 2 ;;
+            --aligner)
+                ALIGNER="$2"
+                shift 2 ;;
+            --reference)
+                REFERENCE_GENOME="$2"
+                shift 2 ;;
+            --gtf)
+                REFERENCE_GTF="$2"
+                shift 2 ;;
+            --single-end)
+                PAIRED_END=false
+                shift ;;
+            -h|--help)
+                usage ;;
+            *)
+                log_error "Unknown option: $1"
+                usage ;;
         esac
     done
     
     if [ -z "$INPUT_DIR" ] || [ -z "$OUTPUT_DIR" ]; then
-        log_error "Input and output directories required"
+        log_error "Input and output directories are required"
         usage
     fi
     
@@ -525,17 +601,27 @@ main() {
     echo ""
     
     parse_arguments "$@"
-    check_installation
+    load_configuration
+    
+    # Log Python configuration
+    if [ "$USE_SYSTEM_PYTHON" = "yes" ]; then
+        log_info "Python: Using system Python ($PYTHON_BIN)"
+    else
+        log_info "Python: Using conda (if needed)"
+    fi
     
     [ -z "$ALIGNER" ] && prompt_aligner_selection
-    verify_aligner
+    verify_aligner_availability
     check_reference
     check_or_build_index
     create_output_dirs
     
     local start_time=$(date +%s)
     log_info "Started: $(date)"
+    log_info "Aligner: ${ALIGNER^^}"
+    log_info "Threads: $THREADS"
     
+    echo ""
     if [ -n "$SAMPLE_FILE" ]; then
         log_error "Sample file mode not yet implemented"
         exit 1
@@ -543,11 +629,17 @@ main() {
         process_all_samples
     fi
     
+    echo ""
     generate_summary
     
     local end_time=$(date +%s)
     local runtime=$((end_time - start_time))
-    log_info "Runtime: ${runtime}s"
+    local hours=$((runtime / 3600))
+    local minutes=$(((runtime % 3600) / 60))
+    local seconds=$((runtime % 60))
+    
+    log_info "Completed: $(date)"
+    log_info "Runtime: ${hours}h ${minutes}m ${seconds}s"
     
     display_final_summary
 }
