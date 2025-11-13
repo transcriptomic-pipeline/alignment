@@ -97,10 +97,15 @@ EOF
 
 command_exists() { command -v "$1" >/dev/null 2>&1; }
 
-# Check if conda environment exists and is properly set up
+# Check if conda environment exists and is properly set up (ONLY IF NEEDED)
 check_conda_env() {
-    log_info "Checking conda environment for HISAT2..."
+    # If using system Python, skip conda check entirely
+    if [ "$USE_SYSTEM_PYTHON" = "yes" ]; then
+        log_info "Using system Python for HISAT2 (no conda needed)"
+        return 0
+    fi
     
+    log_info "Checking conda environment for HISAT2..."
     if [ -z "$CONDA_DIR" ] || [ ! -d "$CONDA_DIR" ]; then
         log_error "Conda directory not found: $CONDA_DIR"
         log_error "Please run: ./install.sh --aligner hisat2"
@@ -396,7 +401,7 @@ build_star_index() {
     fi
 }
 
-# Build HISAT2 index with AUTO-CONTINUE and proper conda activation
+# Build HISAT2 index with AUTO-CONTINUE and proper conda activation (ONLY IF NEEDED)
 build_hisat2_index() {
     log_info "Building HISAT2 genome index..."
     log_warning "This may take 30-45 minutes and requires ~8 GB RAM"
@@ -418,36 +423,43 @@ build_hisat2_index() {
     
     mkdir -p "$HISAT2_INDEX_DIR"
     
-    log_info "Activating conda environment for HISAT2 index build..."
-    
-    # Properly source and activate conda environment
-    set +u  # Temporarily disable unset variable check for conda
-    
-    if [ ! -f "${CONDA_DIR}/etc/profile.d/conda.sh" ]; then
-        log_error "Conda profile script not found"
-        exit 1
+    # Check if we need conda or can use system Python
+    if [ "$USE_SYSTEM_PYTHON" = "yes" ]; then
+        log_info "Running HISAT2 genome index build with system Python..."
+        "$HISAT2_BUILD_BIN" \
+            -f "$REFERENCE_GENOME" \
+            -p "$THREADS" \
+            "$HISAT2_INDEX_PREFIX" \
+            2>&1 | tee "${SCRIPT_DIR}/hisat2_index_build.log"
+        local BUILD_STATUS=$?
+    else
+        log_info "Activating conda environment for HISAT2 index build..."
+        set +u # Temporarily disable unset variable check for conda
+        
+        if [ ! -f "${CONDA_DIR}/etc/profile.d/conda.sh" ]; then
+            log_error "Conda profile script not found"
+            exit 1
+        fi
+        
+        source "${CONDA_DIR}/etc/profile.d/conda.sh"
+        
+        if ! conda activate "$CONDA_ENV_NAME" 2>/dev/null; then
+            log_error "Failed to activate conda environment: $CONDA_ENV_NAME"
+            log_error "Please run: ./install.sh --aligner hisat2"
+            exit 1
+        fi
+        
+        log_info "Running HISAT2 genome index build in conda environment '$CONDA_ENV_NAME'..."
+        "$HISAT2_BUILD_BIN" \
+            -f "$REFERENCE_GENOME" \
+            -p "$THREADS" \
+            "$HISAT2_INDEX_PREFIX" \
+            2>&1 | tee "${SCRIPT_DIR}/hisat2_index_build.log"
+        
+        local BUILD_STATUS=$?
+        conda deactivate
+        set -u # Re-enable unset variable check
     fi
-    
-    source "${CONDA_DIR}/etc/profile.d/conda.sh"
-    
-    if ! conda activate "$CONDA_ENV_NAME" 2>/dev/null; then
-        log_error "Failed to activate conda environment: $CONDA_ENV_NAME"
-        log_error "Please run: ./install.sh --aligner hisat2"
-        exit 1
-    fi
-    
-    log_info "Running HISAT2 genome index build in conda environment '$CONDA_ENV_NAME'..."
-    
-    "$HISAT2_BUILD_BIN" \
-        -f "$REFERENCE_GENOME" \
-        -p "$THREADS" \
-        "$HISAT2_INDEX_PREFIX" \
-        2>&1 | tee "${SCRIPT_DIR}/hisat2_index_build.log"
-    
-    local BUILD_STATUS=$?
-    
-    conda deactivate
-    set -u  # Re-enable unset variable check
     
     if [ $BUILD_STATUS -eq 0 ]; then
         log_success "HISAT2 index built successfully"
