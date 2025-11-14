@@ -213,7 +213,7 @@ prompt_reference_selection() {
     echo "========================================"
     echo ""
     
-    # Check if there's a previous reference config
+    # Check for previous
     local HAS_PREVIOUS="no"
     local PREV_TYPE=""
     local PREV_FASTA=""
@@ -233,63 +233,50 @@ prompt_reference_selection() {
     log_info "Select reference genome type"
     echo ""
     echo "  1) Default: Human GRCh38 (Ensembl 113) [recommended]"
-    echo "  2) Custom: Provide your own genome FASTA and GTF"
     
     if [ "$HAS_PREVIOUS" = "yes" ]; then
         if [ "$PREV_TYPE" = "yes" ]; then
-            echo "  3) Previous custom: $(basename $PREV_FASTA)"
+            echo "  2) Previous custom: $(basename $PREV_FASTA)"
         else
-            echo "  3) Previous: GRCh38 (Ensembl 113)"
+            echo "  2) Previous: GRCh38 (Ensembl 113)"
         fi
+        echo "  3) New custom: Provide your own genome FASTA and GTF"
+    else
+        echo "  2) Custom: Provide your own genome FASTA and GTF"
     fi
     
     echo ""
-    
-    # Auto-timeout prompt
-    local timeout=30
     echo -ne "Enter choice [1-"
     [ "$HAS_PREVIOUS" = "yes" ] && echo -ne "3" || echo -ne "2"
-    echo -ne "] (default: 1, auto-select in ${timeout}s): "
+    echo -ne "] (default: 1): "
     
-    read -t $timeout -n 1 -r REPLY || true
+    read -n 1 -r REPLY
     echo
     
-    # Default to 1 if no response
-    if [ -z "$REPLY" ]; then
-        REPLY="1"
-        log_info "No response in ${timeout}s, using default (GRCh38)"
-    fi
-    
     case "${REPLY}" in
-        1)
-            USE_CUSTOM_REFERENCE="no"
-            prompt_reference_directory
-            ;;
+        1) USE_CUSTOM_REFERENCE="no"; prompt_reference_directory ;;
         2)
-            USE_CUSTOM_REFERENCE="yes"
-            prompt_custom_reference
-            ;;
-        3)
             if [ "$HAS_PREVIOUS" = "yes" ]; then
-                # Use previous reference
                 USE_CUSTOM_REFERENCE="$PREV_TYPE"
                 CUSTOM_FASTA="$PREV_FASTA"
                 CUSTOM_GTF="$PREV_GTF"
                 REFERENCE_DIR="$(dirname "$PREV_FASTA")"
-                
                 log_success "Using previous reference"
-                log_info "FASTA: $CUSTOM_FASTA"
-                log_info "GTF: $CUSTOM_GTF"
-                log_info "Reference directory: $REFERENCE_DIR"
+            else
+                USE_CUSTOM_REFERENCE="yes"
+                prompt_custom_reference
+            fi
+            ;;
+        3)
+            if [ "$HAS_PREVIOUS" = "yes" ]; then
+                USE_CUSTOM_REFERENCE="yes"
+                prompt_custom_reference
             else
                 log_error "Invalid choice"
                 exit 1
             fi
             ;;
-        *)
-            log_error "Invalid choice. Please select a valid option."
-            exit 1
-            ;;
+        *) log_error "Invalid choice"; exit 1 ;;
     esac
 }
 
