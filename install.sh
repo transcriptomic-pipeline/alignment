@@ -24,6 +24,11 @@ HISAT2_URL="https://cloud.biohpc.swmed.edu/index.php/s/oTtGWbWjaxsQ2Ho/download/
 REFERENCE_FASTA_URL="https://ftp.ensembl.org/pub/release-113/fasta/homo_sapiens/dna/Homo_sapiens.GRCh38.dna.primary_assembly.fa.gz"
 REFERENCE_GTF_URL="https://ftp.ensembl.org/pub/release-113/gtf/homo_sapiens/Homo_sapiens.GRCh38.113.gtf.gz"
 
+# Reference type
+USE_CUSTOM_REFERENCE="no"
+CUSTOM_FASTA=""
+CUSTOM_GTF=""
+
 # Defaults (aligned with QC module)
 DEFAULT_INSTALL_DIR="${HOME}/softwares"
 DEFAULT_REFERENCE_DIR="${HOME}/references/GRCh38_ensembl113"
@@ -201,9 +206,49 @@ prompt_aligner_choice() {
     esac
 }
 
+prompt_reference_selection() {
+    echo ""
+    echo "========================================"
+    echo "  Reference Genome Selection"
+    echo "========================================"
+    echo ""
+    log_info "Select reference genome type"
+    echo ""
+    echo "  1) Default: Human GRCh38 (Ensembl 113) [recommended]"
+    echo "  2) Custom: Provide your own genome FASTA and GTF"
+    echo ""
+    
+    # Auto-timeout prompt
+    local timeout=30
+    echo -ne "Enter choice [1-2] (default: 1, auto-select in ${timeout}s): "
+    read -t $timeout -n 1 -r REPLY || true
+    echo
+    
+    # Default to 1 if no response
+    if [ -z "$REPLY" ]; then
+        REPLY="1"
+        log_info "No response in ${timeout}s, using default (GRCh38)"
+    fi
+    
+    case "${REPLY}" in
+        1)
+            USE_CUSTOM_REFERENCE="no"
+            prompt_reference_directory
+            ;;
+        2)
+            USE_CUSTOM_REFERENCE="yes"
+            prompt_custom_reference
+            ;;
+        *)
+            log_error "Invalid choice. Please select 1 or 2."
+            exit 1
+            ;;
+    esac
+}
+
 prompt_reference_directory() {
     echo ""
-    log_info "Reference genome directory"
+    log_info "Default reference genome directory"
     echo ""
     echo "  1) ${HOME}/references/GRCh38_ensembl113 (recommended)"
     echo "  2) Custom directory"
@@ -223,6 +268,49 @@ prompt_reference_directory() {
     REFERENCE_DIR="${REFERENCE_DIR%/}"
     mkdir -p "${REFERENCE_DIR}"
     log_success "Reference directory: ${REFERENCE_DIR}"
+}
+
+prompt_custom_reference() {
+    echo ""
+    log_info "Custom reference genome configuration"
+    echo ""
+    log_warning "You need to provide:"
+    echo "  1. Genome FASTA file (.fa or .fasta)"
+    echo "  2. Gene annotation GTF file (.gtf)"
+    echo ""
+    
+    # Prompt for FASTA
+    read -p "Enter path to genome FASTA file: " CUSTOM_FASTA
+    CUSTOM_FASTA="${CUSTOM_FASTA/#\~/$HOME}"
+    
+    # Prompt for GTF
+    read -p "Enter path to GTF annotation file: " CUSTOM_GTF
+    CUSTOM_GTF="${CUSTOM_GTF/#\~/$HOME}"
+    
+    # Validate files
+    if [ ! -f "$CUSTOM_FASTA" ]; then
+        log_error "FASTA file not found: $CUSTOM_FASTA"
+        echo ""
+        log_info "Please place your genome FASTA file at the specified path and re-run the installer."
+        log_info "Example: cp /path/to/your/genome.fa $CUSTOM_FASTA"
+        exit 1
+    fi
+    
+    if [ ! -f "$CUSTOM_GTF" ]; then
+        log_error "GTF file not found: $CUSTOM_GTF"
+        echo ""
+        log_info "Please place your GTF annotation file at the specified path and re-run the installer."
+        log_info "Example: cp /path/to/your/genes.gtf $CUSTOM_GTF"
+        exit 1
+    fi
+    
+    # Set reference directory to parent directory of FASTA
+    REFERENCE_DIR="$(dirname "$CUSTOM_FASTA")"
+    
+    log_success "Custom reference validated:"
+    log_info "FASTA: $CUSTOM_FASTA"
+    log_info "GTF: $CUSTOM_GTF"
+    log_info "Reference directory: $REFERENCE_DIR"
 }
 
 check_star() {
@@ -370,7 +458,12 @@ check_dependencies() {
 }
 
 download_reference() {
-    log_info "Downloading reference genome..."
+    if [ "$USE_CUSTOM_REFERENCE" = "yes" ]; then
+        log_info "Using custom reference genome (skipping download)"
+        return 0
+    fi
+    
+    log_info "Downloading default reference genome (GRCh38 Ensembl 113)..."
     
     cd "${REFERENCE_DIR}"
     
@@ -439,16 +532,33 @@ CONDA_DIR="${CONDA_DIR}"
 CONDA_ENV_NAME="${CONDA_ENV_NAME}"
 EOF
     
+    # Determine reference files based on custom vs default
+    if [ "$USE_CUSTOM_REFERENCE" = "yes" ]; then
+        local REF_FASTA="$CUSTOM_FASTA"
+        local REF_GTF="$CUSTOM_GTF"
+        local GENOME_BASENAME=$(basename "${REF_FASTA}" | sed 's/\.[^.]*$//')
+        local STAR_IDX="${REFERENCE_DIR}/STAR_index_${GENOME_BASENAME}"
+        local HISAT2_IDX="${REFERENCE_DIR}/HISAT2_index_${GENOME_BASENAME}"
+        local HISAT2_PREFIX="${HISAT2_IDX}/genome"
+    else
+        local REF_FASTA="${REFERENCE_DIR}/Homo_sapiens.GRCh38.dna.primary_assembly.fa"
+        local REF_GTF="${REFERENCE_DIR}/Homo_sapiens.GRCh38.113.gtf"
+        local STAR_IDX="${REFERENCE_DIR}/STAR_index"
+        local HISAT2_IDX="${REFERENCE_DIR}/HISAT2_index"
+        local HISAT2_PREFIX="${HISAT2_IDX}/genome"
+    fi
+    
     cat > "${SCRIPT_DIR}/config/reference_paths.conf" << EOF
 # Reference Genome Configuration
 # Generated: $(date)
 
+USE_CUSTOM_REFERENCE="${USE_CUSTOM_REFERENCE}"
 REFERENCE_DIR="${REFERENCE_DIR}"
-REFERENCE_FASTA="${REFERENCE_DIR}/Homo_sapiens.GRCh38.dna.primary_assembly.fa"
-REFERENCE_GTF="${REFERENCE_DIR}/Homo_sapiens.GRCh38.113.gtf"
-STAR_INDEX_DIR="${REFERENCE_DIR}/STAR_index"
-HISAT2_INDEX_DIR="${REFERENCE_DIR}/HISAT2_index"
-HISAT2_INDEX_PREFIX="${REFERENCE_DIR}/HISAT2_index/genome"
+REFERENCE_FASTA="${REF_FASTA}"
+REFERENCE_GTF="${REF_GTF}"
+STAR_INDEX_DIR="${STAR_IDX}"
+HISAT2_INDEX_DIR="${HISAT2_IDX}"
+HISAT2_INDEX_PREFIX="${HISAT2_PREFIX}"
 EOF
     
     log_success "Configuration saved to: ${SCRIPT_DIR}/config/"
@@ -531,23 +641,29 @@ main() {
         fi
     fi
     
-    # Download reference genome
+       # Download reference genome
     if [ -z "$DOWNLOAD_REFERENCE" ]; then
         echo ""
-        read -p "Download reference genome? [Y/n] " -n 1 -r
-        echo
-        if [[ ! $REPLY =~ ^[Nn]$ ]]; then
-            DOWNLOAD_REFERENCE="yes"
+        if [ "$USE_CUSTOM_REFERENCE" = "no" ]; then
+            read -p "Download default reference genome (GRCh38)? [Y/n] " -n 1 -r
+            echo
+            if [[ ! $REPLY =~ ^[Nn]$ ]]; then
+                DOWNLOAD_REFERENCE="yes"
+            else
+                DOWNLOAD_REFERENCE="no"
+            fi
         else
             DOWNLOAD_REFERENCE="no"
         fi
     fi
     
     if [ "$DOWNLOAD_REFERENCE" = "yes" ]; then
-        [ -z "$REFERENCE_DIR" ] && prompt_reference_directory
+        [ -z "$REFERENCE_DIR" ] && prompt_reference_selection
         download_reference
     else
-        REFERENCE_DIR="${DEFAULT_REFERENCE_DIR}"
+        if [ "$USE_CUSTOM_REFERENCE" = "no" ]; then
+            REFERENCE_DIR="${DEFAULT_REFERENCE_DIR}"
+        fi
         log_info "Skipping reference download"
     fi
     
@@ -598,6 +714,17 @@ while [[ $# -gt 0 ]]; do
             REFERENCE_DIR="${REFERENCE_DIR%/}"
             shift 2
             ;;
+        --custom-reference)
+            USE_CUSTOM_REFERENCE="yes"
+            CUSTOM_FASTA="$2"
+            CUSTOM_FASTA="${CUSTOM_FASTA/#\~/$HOME}"
+            shift 2
+            ;;
+        --custom-gtf)
+            CUSTOM_GTF="$2"
+            CUSTOM_GTF="${CUSTOM_GTF/#\~/$HOME}"
+            shift 2
+            ;;
         --aligner)
             case "$2" in
                 star)
@@ -627,16 +754,27 @@ while [[ $# -gt 0 ]]; do
             DOWNLOAD_REFERENCE="no"
             shift
             ;;
-        -h|--help)
+                -h|--help)
             echo "Usage: $0 [OPTIONS]"
             echo ""
             echo "Options:"
             echo "  --install-dir <path>        Installation directory (default: ~/softwares)"
             echo "  --reference-dir <path>      Reference genome directory"
             echo "  --aligner <star|hisat2|both> Which aligner(s) to install"
-            echo "  --download-reference        Download reference genome"
+            echo "  --download-reference        Download default reference (GRCh38)"
             echo "  --skip-reference            Skip reference download"
+            echo "  --custom-reference <path>   Use custom genome FASTA"
+            echo "  --custom-gtf <path>         Use custom GTF annotation"
             echo "  -h, --help                  Show this help"
+            echo ""
+            echo "Examples:"
+            echo "  # Install with default reference"
+            echo "  $0 --aligner both --download-reference"
+            echo ""
+            echo "  # Install with custom reference"
+            echo "  $0 --aligner star \\"
+            echo "    --custom-reference /path/to/genome.fa \\"
+            echo "    --custom-gtf /path/to/genes.gtf"
             exit 0
             ;;
         *)
