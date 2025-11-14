@@ -233,16 +233,14 @@ prompt_reference_selection() {
     log_info "Select reference genome type"
     echo ""
     echo "  1) Default: Human GRCh38 (Ensembl 113) [recommended]"
+    echo "  2) Custom: Provide your own genome FASTA and GTF"
     
     if [ "$HAS_PREVIOUS" = "yes" ]; then
         if [ "$PREV_TYPE" = "yes" ]; then
-            echo "  2) Previous custom: $(basename $PREV_FASTA)"
+            echo "  3) Previous custom: $(basename $PREV_FASTA)"
         else
-            echo "  2) Previous default: GRCh38 (Ensembl 113)"
+            echo "  3) Previous: GRCh38 (Ensembl 113)"
         fi
-        echo "  3) New custom: Provide your own genome FASTA and GTF"
-    else
-        echo "  2) Custom: Provide your own genome FASTA and GTF"
     fi
     
     echo ""
@@ -268,6 +266,10 @@ prompt_reference_selection() {
             prompt_reference_directory
             ;;
         2)
+            USE_CUSTOM_REFERENCE="yes"
+            prompt_custom_reference
+            ;;
+        3)
             if [ "$HAS_PREVIOUS" = "yes" ]; then
                 # Use previous reference
                 USE_CUSTOM_REFERENCE="$PREV_TYPE"
@@ -279,17 +281,6 @@ prompt_reference_selection() {
                 log_info "FASTA: $CUSTOM_FASTA"
                 log_info "GTF: $CUSTOM_GTF"
                 log_info "Reference directory: $REFERENCE_DIR"
-            else
-                # Prompt for new custom
-                USE_CUSTOM_REFERENCE="yes"
-                prompt_custom_reference
-            fi
-            ;;
-        3)
-            if [ "$HAS_PREVIOUS" = "yes" ]; then
-                # Prompt for new custom
-                USE_CUSTOM_REFERENCE="yes"
-                prompt_custom_reference
             else
                 log_error "Invalid choice"
                 exit 1
