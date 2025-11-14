@@ -2,7 +2,7 @@
 
 # Alignment Module - Main Execution Script
 # Supports STAR and HISAT2 with auto-installation, auto-indexing, and "both" mode
-# Uses pre-installed Miniconda environment for HISAT2
+# Uses pre-installed python3 or creates Miniconda python3 environment for HISAT2
 
 set -euo pipefail
 
