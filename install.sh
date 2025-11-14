@@ -67,6 +67,7 @@ detect_distro() {
 check_system_python() {
     log_info "Checking for system Python 3..."
     
+    # First, try python3 command
     if command_exists python3; then
         local PYTHON_VERSION_OUTPUT=$(python3 --version 2>&1)
         if [[ "$PYTHON_VERSION_OUTPUT" =~ Python\ ([0-9]+)\.([0-9]+) ]]; then
@@ -83,6 +84,7 @@ check_system_python() {
         fi
     fi
     
+    # Second, try python command (must be Python 3.6+)
     if command_exists python; then
         local PYTHON_VERSION_OUTPUT=$(python --version 2>&1)
         if [[ "$PYTHON_VERSION_OUTPUT" =~ Python\ ([0-9]+)\.([0-9]+) ]]; then
@@ -93,7 +95,8 @@ check_system_python() {
                 PYTHON_BIN=$(command -v python)
                 USE_SYSTEM_PYTHON="yes"
                 log_success "System Python 3 found: $PYTHON_VERSION_OUTPUT"
-                log_info "Using system Python: $PYTHON_BIN"
+                log_info "Using system Python: $PYTHON_BIN (command: python)"
+                log_warning "HISAT2 will use 'python' command (not patching to python3)"
                 return 0
             fi
         fi
@@ -284,31 +287,37 @@ install_hisat2() {
 }
 
 # Patch HISAT2 scripts to use python3 instead of python
+# Patch HISAT2 scripts to use python3 instead of python (ONLY if needed)
 patch_hisat2_python() {
-    log_info "Patching HISAT2 scripts to use python3..."
-    
-    local HISAT2_SCRIPTS=(
-        "${HISAT2_DIR}/hisat2"
-        "${HISAT2_DIR}/hisat2-build"
-        "${HISAT2_DIR}/hisat2-inspect"
-        "${HISAT2_DIR}/hisat2-align-s"
-        "${HISAT2_DIR}/hisat2-align-l"
-        "${HISAT2_DIR}/hisat2-build-s"
-        "${HISAT2_DIR}/hisat2-build-l"
-    )
-    
-    for script in "${HISAT2_SCRIPTS[@]}"; do
-        if [ -f "$script" ]; then
-            # Check if script uses '#!/usr/bin/env python'
-            if head -n 1 "$script" | grep -q "#!/usr/bin/env python$"; then
-                log_info "Patching: $(basename $script)"
-                # Replace first line with python3
-                sed -i '1s|#!/usr/bin/env python$|#!/usr/bin/env python3|' "$script"
+    # Only patch if PYTHON_BIN is python3 (not python)
+    if [[ "$PYTHON_BIN" == *"python3"* ]]; then
+        log_info "Patching HISAT2 scripts to use python3..."
+        
+        local HISAT2_SCRIPTS=(
+            "${HISAT2_DIR}/hisat2"
+            "${HISAT2_DIR}/hisat2-build"
+            "${HISAT2_DIR}/hisat2-inspect"
+            "${HISAT2_DIR}/hisat2-align-s"
+            "${HISAT2_DIR}/hisat2-align-l"
+            "${HISAT2_DIR}/hisat2-build-s"
+            "${HISAT2_DIR}/hisat2-build-l"
+        )
+        
+        for script in "${HISAT2_SCRIPTS[@]}"; do
+            if [ -f "$script" ]; then
+                # Check if script uses '#!/usr/bin/env python'
+                if head -n 1 "$script" | grep -q "#!/usr/bin/env python$"; then
+                    log_info "Patching: $(basename $script)"
+                    # Replace first line with python3
+                    sed -i '1s|#!/usr/bin/env python$|#!/usr/bin/env python3|' "$script"
+                fi
             fi
-        fi
-    done
-    
-    log_success "HISAT2 scripts patched to use python3"
+        done
+        
+        log_success "HISAT2 scripts patched to use python3"
+    else
+        log_info "HISAT2 scripts will use 'python' command (no patching needed)"
+    fi
 }
 
 check_samtools() {
