@@ -313,6 +313,48 @@ prompt_custom_reference() {
     log_info "Reference directory: $REFERENCE_DIR"
 }
 
+# Validate custom reference from CLI arguments
+validate_custom_reference_cli() {
+    if [ "$USE_CUSTOM_REFERENCE" = "yes" ]; then
+        # Validate FASTA
+        if [ -z "$CUSTOM_FASTA" ]; then
+            log_error "Custom reference selected but no FASTA file specified"
+            log_info "Use: --custom-reference /path/to/genome.fa"
+            exit 1
+        fi
+        
+        if [ ! -f "$CUSTOM_FASTA" ]; then
+            log_error "FASTA file not found: $CUSTOM_FASTA"
+            echo ""
+            log_info "Please place your genome FASTA file at the specified path and re-run."
+            log_info "Example: cp /path/to/your/genome.fa $CUSTOM_FASTA"
+            exit 1
+        fi
+        
+        # Validate GTF
+        if [ -z "$CUSTOM_GTF" ]; then
+            log_error "Custom reference selected but no GTF file specified"
+            log_info "Use: --custom-gtf /path/to/genes.gtf"
+            exit 1
+        fi
+        
+        if [ ! -f "$CUSTOM_GTF" ]; then
+            log_error "GTF file not found: $CUSTOM_GTF"
+            echo ""
+            log_info "Please place your GTF annotation file at the specified path and re-run."
+            log_info "Example: cp /path/to/your/genes.gtf $CUSTOM_GTF"
+            exit 1
+        fi
+        
+        # Set reference directory
+        REFERENCE_DIR="$(dirname "$CUSTOM_FASTA")"
+        
+        log_success "Custom reference validated (CLI):"
+        log_info "FASTA: $CUSTOM_FASTA"
+        log_info "GTF: $CUSTOM_GTF"
+    fi
+}
+
 check_star() {
     [ -f "${STAR_DIR}/STAR" ] && "${STAR_DIR}/STAR" --version >/dev/null 2>&1
 }
@@ -374,7 +416,6 @@ install_hisat2() {
     "${HISAT2_DIR}/hisat2" --version >/dev/null 2>&1
 }
 
-# Patch HISAT2 scripts to use python3 instead of python
 # Patch HISAT2 scripts to use python3 instead of python (ONLY if needed)
 patch_hisat2_python() {
     # Only patch if PYTHON_BIN is python3 (not python)
@@ -602,6 +643,9 @@ main() {
     # Check and install dependencies
     check_dependencies
     
+    # Validate custom reference if provided via CLI
+    validate_custom_reference_cli
+    
     echo ""
     log_info "Starting installation..."
     echo ""
@@ -641,7 +685,7 @@ main() {
         fi
     fi
     
-       # Download reference genome
+    # Download reference genome OR prompt for selection
     if [ -z "$DOWNLOAD_REFERENCE" ]; then
         echo ""
         if [ "$USE_CUSTOM_REFERENCE" = "no" ]; then
@@ -649,19 +693,27 @@ main() {
             echo
             if [[ ! $REPLY =~ ^[Nn]$ ]]; then
                 DOWNLOAD_REFERENCE="yes"
+                # Only prompt for directory if not already set
+                if [ -z "$REFERENCE_DIR" ]; then
+                    prompt_reference_selection
+                fi
             else
                 DOWNLOAD_REFERENCE="no"
             fi
         else
             DOWNLOAD_REFERENCE="no"
         fi
+    else
+        # CLI argument provided, prompt for reference selection if needed
+        if [ "$DOWNLOAD_REFERENCE" = "yes" ] && [ -z "$REFERENCE_DIR" ]; then
+            prompt_reference_selection
+        fi
     fi
     
     if [ "$DOWNLOAD_REFERENCE" = "yes" ]; then
-        [ -z "$REFERENCE_DIR" ] && prompt_reference_selection
         download_reference
     else
-        if [ "$USE_CUSTOM_REFERENCE" = "no" ]; then
+        if [ "$USE_CUSTOM_REFERENCE" = "no" ] && [ -z "$REFERENCE_DIR" ]; then
             REFERENCE_DIR="${DEFAULT_REFERENCE_DIR}"
         fi
         log_info "Skipping reference download"
@@ -693,7 +745,11 @@ main() {
     
     echo ""
     log_info "Installation directory: ${INSTALL_BASE_DIR}"
-    [ "$DOWNLOAD_REFERENCE" = "yes" ] && log_info "Reference directory: ${REFERENCE_DIR}"
+    if [ "$USE_CUSTOM_REFERENCE" = "yes" ]; then
+        log_info "Custom reference: $(basename $CUSTOM_FASTA)"
+    elif [ "$DOWNLOAD_REFERENCE" = "yes" ]; then
+        log_info "Reference directory: ${REFERENCE_DIR}"
+    fi
     echo ""
     log_warning "Restart terminal or run: source ~/.bashrc"
     echo ""
@@ -754,18 +810,18 @@ while [[ $# -gt 0 ]]; do
             DOWNLOAD_REFERENCE="no"
             shift
             ;;
-                -h|--help)
+        -h|--help)
             echo "Usage: $0 [OPTIONS]"
             echo ""
             echo "Options:"
-            echo "  --install-dir <path>        Installation directory (default: ~/softwares)"
-            echo "  --reference-dir <path>      Reference genome directory"
+            echo "  --install-dir <path>         Installation directory (default: ~/softwares)"
+            echo "  --reference-dir <path>       Reference genome directory"
             echo "  --aligner <star|hisat2|both> Which aligner(s) to install"
-            echo "  --download-reference        Download default reference (GRCh38)"
-            echo "  --skip-reference            Skip reference download"
-            echo "  --custom-reference <path>   Use custom genome FASTA"
-            echo "  --custom-gtf <path>         Use custom GTF annotation"
-            echo "  -h, --help                  Show this help"
+            echo "  --download-reference         Download default reference (GRCh38)"
+            echo "  --skip-reference             Skip reference download"
+            echo "  --custom-reference <path>    Use custom genome FASTA"
+            echo "  --custom-gtf <path>          Use custom GTF annotation"
+            echo "  -h, --help                   Show this help"
             echo ""
             echo "Examples:"
             echo "  # Install with default reference"
