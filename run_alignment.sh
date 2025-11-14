@@ -2,7 +2,6 @@
 
 # Alignment Module - Main Execution Script
 # Supports STAR and HISAT2 with auto-installation, auto-indexing, and "both" mode
-# Uses pre-installed python3 or creates Miniconda python3 environment for HISAT2
 
 set -euo pipefail
 
@@ -33,10 +32,6 @@ REFERENCE_GTF=""
 GENOME_INDEX_DIR=""
 PAIRED_END=true
 
-# Reference selection flags
-USE_DEFAULT_REF="no"
-USE_PREVIOUS_REF="no"
-
 # Tool paths
 STAR_BIN=""
 HISAT2_BIN=""
@@ -45,130 +40,123 @@ SAMTOOLS_BIN=""
 STAR_INDEX_DIR=""
 HISAT2_INDEX_DIR=""
 HISAT2_INDEX_PREFIX=""
-
-# Conda settings (loaded from config)
+PYTHON_BIN=""
+USE_SYSTEM_PYTHON="no"
 CONDA_DIR=""
 CONDA_ENV_NAME=""
 
-# Timeout for auto-continue prompts (in seconds)
-PROMPT_TIMEOUT=30
+# Default reference paths (loaded from config)
+DEFAULT_FASTA=""
+DEFAULT_GTF=""
+DEFAULT_REFERENCE_DIR=""
 
 # Usage
-usage() {
-cat << EOF
-Usage: $0 -i <input_dir> -o <output_dir> [--aligner <aligner>] [options]
+show_usage() {
+    cat << EOF
+Usage: $(basename "$0") -i INPUT_DIR -o OUTPUT_DIR [OPTIONS]
 
-Required:
-  -i, --input <dir>           Input directory with trimmed FASTQ files
-                              (e.g., qc_results/trimmed/PE/)
-  -o, --output <dir>          Output directory for aligned BAM files
+Required Arguments:
+  -i, --input DIR          Input directory with trimmed FASTQ files
+  -o, --output DIR         Output directory for aligned BAM files
 
-Optional:
-  --aligner <aligner>         Aligner to use: star, hisat2, both, or omit to prompt at runtime
-  -s, --samples <file>        Sample list file (one sample ID per line)
-  -t, --threads <num>         Number of threads (default: 12)
-  --single-end                Process as single-end reads (default: paired-end)
-  -h, --help                  Show this help message
-
-Reference Genome Options:
-  --reference <file>          Path to custom reference FASTA file
-  --gtf <file>                Path to custom GTF annotation file
-  --reference-default         Use default GRCh38 reference (skip prompt)
-  --reference-previous        Use previously configured reference (skip prompt)
-
-Aligner Selection:
-  --aligner star              Use STAR only (high memory ~32GB, best for splice detection)
-  --aligner hisat2            Use HISAT2 only (low memory ~8GB, faster)
-  --aligner both              Use BOTH aligners (creates separate outputs for comparison)
-  (no --aligner)              Prompt at runtime to choose interactively
+Optional Arguments:
+  -t, --threads NUM        Number of threads (default: 12)
+  -a, --aligner TYPE       Aligner: star, hisat2, or both (default: prompt)
+  -s, --samples FILE       Sample list file (auto-detected if not provided)
+  
+  --reference FASTA        Custom reference genome FASTA
+  --gtf GTF                Custom reference GTF annotation
+  
+  -h, --help               Show this help message
 
 Examples:
   # Interactive mode (prompts for aligner and reference)
-  $0 -i qc_results/trimmed/PE -o alignment_results -t 20
-
-  # Use STAR with default reference (non-interactive)
-  $0 -i qc_results/trimmed/PE -o alignment_results \\
-    --aligner star --reference-default -t 20
-
-  # Use previous reference with both aligners
-  $0 -i qc_results/trimmed/PE -o alignment_results \\
-    --aligner both --reference-previous -t 16
-
-  # Use custom reference genome
-  $0 -i qc_results/trimmed/PE -o alignment_results \\
-    --aligner star \\
-    --reference /path/to/genome.fa \\
-    --gtf /path/to/genes.gtf \\
-    -t 20
-
-  # Use BOTH aligners (for comparison)
-  $0 -i qc_results/trimmed/PE -o alignment_results --aligner both -t 20
-
-Integration with QC Module:
-  # Direct from QC output
-  $0 -i qc_results/trimmed/PE -o alignment_results --aligner star
+  $(basename "$0") -i qc_output/trimmed/PE -o alignment_output -t 12
+  
+  # With specific aligner
+  $(basename "$0") -i qc_output/trimmed/PE -o alignment_output -a star
+  
+  # With custom reference
+  $(basename "$0") -i qc_output/trimmed/PE -o alignment_output \\
+    --reference /path/to/genome.fa --gtf /path/to/genes.gtf
+    
+  # Run both aligners for comparison
+  $(basename "$0") -i qc_output/trimmed/PE -o alignment_output -a both
 
 EOF
-exit 1
 }
 
-command_exists() { command -v "$1" >/dev/null 2>&1; }
-
-# Check if conda environment exists and is properly set up (ONLY IF NEEDED)
-check_conda_env() {
-    # If using system Python, skip conda check entirely
-    if [ "$USE_SYSTEM_PYTHON" = "yes" ]; then
-        log_info "Using system Python for HISAT2 (no conda needed)"
-        return 0
-    fi
-    
-    log_info "Checking conda environment for HISAT2..."
-    
-    if [ -z "$CONDA_DIR" ] || [ ! -d "$CONDA_DIR" ]; then
-        log_error "Conda directory not found: $CONDA_DIR"
-        log_error "Please run: ./install.sh --aligner hisat2"
+# Parse command line arguments
+parse_args() {
+    if [ $# -eq 0 ]; then
+        show_usage
         exit 1
     fi
     
-    if [ ! -f "$CONDA_DIR/bin/conda" ]; then
-        log_error "Conda not properly installed at: $CONDA_DIR"
-        log_error "Please run: ./install.sh --aligner hisat2"
+    while [[ $# -gt 0 ]]; do
+        case $1 in
+            -i|--input)
+                INPUT_DIR="$2"
+                shift 2
+                ;;
+            -o|--output)
+                OUTPUT_DIR="$2"
+                shift 2
+                ;;
+            -t|--threads)
+                THREADS="$2"
+                shift 2
+                ;;
+            -a|--aligner)
+                ALIGNER="$2"
+                shift 2
+                ;;
+            -s|--samples)
+                SAMPLE_FILE="$2"
+                shift 2
+                ;;
+            --reference)
+                REFERENCE_GENOME="$2"
+                shift 2
+                ;;
+            --gtf)
+                REFERENCE_GTF="$2"
+                shift 2
+                ;;
+            -h|--help)
+                show_usage
+                exit 0
+                ;;
+            *)
+                log_error "Unknown option: $1"
+                show_usage
+                exit 1
+                ;;
+        esac
+    done
+    
+    # Validate required arguments
+    if [ -z "$INPUT_DIR" ] || [ -z "$OUTPUT_DIR" ]; then
+        log_error "Input and output directories are required"
+        show_usage
         exit 1
     fi
-    
-    # Initialize conda in this shell session
-    if [ ! -f "${CONDA_DIR}/etc/profile.d/conda.sh" ]; then
-        log_error "Conda profile script not found at: ${CONDA_DIR}/etc/profile.d/conda.sh"
-        log_error "Please reinstall: ./install.sh --aligner hisat2"
-        exit 1
-    fi
-    
-    # Source conda profile
-    source "${CONDA_DIR}/etc/profile.d/conda.sh"
-    
-    # Check if environment exists
-    if ! conda env list | grep -q "^${CONDA_ENV_NAME} "; then
-        log_error "Conda environment '$CONDA_ENV_NAME' not found"
-        log_error "Available environments:"
-        conda env list
-        log_error "Please run: ./install.sh --aligner hisat2"
-        exit 1
-    fi
-    
-    log_success "Conda environment '$CONDA_ENV_NAME' is available"
 }
 
-# Check installation
+# Check if tools are installed
 check_installation() {
     log_info "Checking for installed tools..."
     
     if [ ! -f "$CONFIG_FILE" ]; then
         log_warning "Alignment tools not installed"
         log_info "Installation required"
+        echo ""
         
-        # Ask which aligner to install
-        if [ "$ALIGNER" = "" ]; then
-            echo ""
+        # Determine which aligner to install
+        local INSTALL_ALIGNER=""
+        if [ -n "$ALIGNER" ]; then
+            INSTALL_ALIGNER="$ALIGNER"
+        else
             echo "Which aligner would you like to install?"
             echo "  1) STAR (recommended for high-memory systems)"
             echo "  2) HISAT2 (recommended for low-memory systems)"
@@ -176,50 +164,44 @@ check_installation() {
             echo ""
             read -p "Enter choice [1-3]: " INSTALL_CHOICE
             
-            case "$INSTALL_CHOICE" in
+            case "${INSTALL_CHOICE}" in
                 1) INSTALL_ALIGNER="star" ;;
                 2) INSTALL_ALIGNER="hisat2" ;;
                 3) INSTALL_ALIGNER="both" ;;
-                *) log_error "Invalid choice"; exit 1 ;;
+                *) INSTALL_ALIGNER="both" ;;
             esac
-        elif [ "$ALIGNER" = "both" ]; then
-            INSTALL_ALIGNER="both"
-        else
-            INSTALL_ALIGNER="$ALIGNER"
         fi
         
         read -p "Run installation now? [Y/n] " -n 1 -r
         echo
         
         if [[ ! $REPLY =~ ^[Nn]$ ]]; then
-            if [ -f "${SCRIPT_DIR}/install.sh" ]; then
-                log_info "Running installer..."
-                bash "${SCRIPT_DIR}/install.sh" --aligner "$INSTALL_ALIGNER" --download-reference
-                
-                if [ $? -eq 0 ] && [ -f "$CONFIG_FILE" ]; then
-                    log_success "Installation completed"
-                else
-                    log_error "Installation failed"
-                    exit 1
-                fi
+            log_info "Running installer..."
+            bash "${SCRIPT_DIR}/install.sh" --aligner "$INSTALL_ALIGNER"
+            
+            if [ $? -eq 0 ]; then
+                log_success "Installation completed"
             else
-                log_error "Installer not found: ${SCRIPT_DIR}/install.sh"
+                log_error "Installation failed"
                 exit 1
             fi
         else
-            log_error "Tools must be installed to proceed"
+            log_error "Installation is required to proceed"
             exit 1
         fi
     fi
     
     # Load configuration
-    source "$CONFIG_FILE"
-    [ -f "$REF_CONFIG" ] && source "$REF_CONFIG"
-    
-    log_success "Configuration loaded"
+    if [ -f "$CONFIG_FILE" ]; then
+        source "$CONFIG_FILE"
+        log_success "Configuration loaded"
+    else
+        log_error "Configuration file not found: $CONFIG_FILE"
+        exit 1
+    fi
 }
 
-# Prompt for aligner selection at runtime
+# Prompt for aligner selection
 prompt_aligner_selection() {
     echo ""
     echo "========================================"
@@ -227,9 +209,11 @@ prompt_aligner_selection() {
     echo "========================================"
     echo ""
     
-    # Check which aligners are installed
-    local STAR_AVAILABLE=$([[ "$STAR_INSTALLED" == "yes" && -f "$STAR_BIN" ]] && echo "yes" || echo "no")
-    local HISAT2_AVAILABLE=$([[ "$HISAT2_INSTALLED" == "yes" && -f "$HISAT2_BIN" ]] && echo "yes" || echo "no")
+    local STAR_AVAILABLE="no"
+    local HISAT2_AVAILABLE="no"
+    
+    [ "$STAR_INSTALLED" = "yes" ] && [ -x "$STAR_BIN" ] && STAR_AVAILABLE="yes"
+    [ "$HISAT2_INSTALLED" = "yes" ] && [ -x "$HISAT2_BIN" ] && HISAT2_AVAILABLE="yes"
     
     if [ "$STAR_AVAILABLE" = "yes" ] && [ "$HISAT2_AVAILABLE" = "yes" ]; then
         log_info "Both STAR and HISAT2 are installed"
@@ -239,76 +223,236 @@ prompt_aligner_selection() {
         echo "  2) HISAT2 (low memory ~8GB, faster)"
         echo "  3) BOTH (run alignment with both aligners for comparison)"
         echo ""
-        read -p "Enter choice [1-3]: " ALIGNER_CHOICE
+        read -p "Enter choice [1-3]: " -n 1 -r CHOICE
+        echo
         
-        case "$ALIGNER_CHOICE" in
+        case "${CHOICE}" in
             1) ALIGNER="star" ;;
             2) ALIGNER="hisat2" ;;
             3) ALIGNER="both" ;;
-            *) log_error "Invalid choice"; exit 1 ;;
+            *) ALIGNER="both" ;;
         esac
     elif [ "$STAR_AVAILABLE" = "yes" ]; then
-        log_info "Using STAR (only installed aligner)"
         ALIGNER="star"
+        log_info "Using STAR (only aligner installed)"
     elif [ "$HISAT2_AVAILABLE" = "yes" ]; then
-        log_info "Using HISAT2 (only installed aligner)"
         ALIGNER="hisat2"
+        log_info "Using HISAT2 (only aligner installed)"
     else
-        log_error "No aligner installed"
-        log_info "Please run: ./install.sh"
+        log_error "No aligners are installed or available"
         exit 1
     fi
     
     log_success "Selected aligner: ${ALIGNER^^}"
 }
 
-# Verify aligner is available
-verify_aligner() {
-    local need_star=false
-    local need_hisat2=false
-    
-    case "$ALIGNER" in
-        star)
-            need_star=true
-            ;;
-        hisat2)
-            need_hisat2=true
-            ;;
-        both)
-            need_star=true
-            need_hisat2=true
-            ;;
-        *)
-            log_error "Invalid aligner: $ALIGNER"
-            exit 1
-            ;;
-    esac
-    
-    # Check STAR if needed
-    if [ "$need_star" = true ]; then
-        if [ "$STAR_INSTALLED" != "yes" ] || [ ! -f "$STAR_BIN" ]; then
-            log_error "STAR not installed"
-            log_info "Run: ./install.sh --aligner star"
+# Check aligner availability
+check_aligner_availability() {
+    if [[ "$ALIGNER" == "star" || "$ALIGNER" == "both" ]]; then
+        if [ ! -x "$STAR_BIN" ]; then
+            log_error "STAR not found: $STAR_BIN"
             exit 1
         fi
         log_success "STAR is available"
     fi
     
-    # Check HISAT2 if needed
-    if [ "$need_hisat2" = true ]; then
-        if [ "$HISAT2_INSTALLED" != "yes" ] || [ ! -f "$HISAT2_BIN" ]; then
-            log_error "HISAT2 not installed"
-            log_info "Run: ./install.sh --aligner hisat2"
+    if [[ "$ALIGNER" == "hisat2" || "$ALIGNER" == "both" ]]; then
+        if [ ! -x "$HISAT2_BIN" ]; then
+            log_error "HISAT2 not found: $HISAT2_BIN"
             exit 1
         fi
         log_success "HISAT2 is available"
         
-        # Check conda environment for HISAT2
-        check_conda_env
+        # Check Python for HISAT2
+        if [ "$USE_SYSTEM_PYTHON" = "yes" ]; then
+            log_info "Using system Python for HISAT2 (no conda needed)"
+        elif [ -d "$CONDA_DIR" ]; then
+            log_info "Using Miniconda Python for HISAT2"
+        else
+            log_warning "Python environment not properly configured for HISAT2"
+        fi
     fi
 }
 
-# Check reference genome
+# Prompt for custom reference (interactive)
+prompt_custom_reference_interactive() {
+    echo ""
+    log_info "Custom reference genome configuration"
+    echo ""
+    log_warning "You need to provide:"
+    echo "  1. Genome FASTA file (.fa or .fasta)"
+    echo "  2. Gene annotation GTF file (.gtf)"
+    echo ""
+    
+    read -p "Enter path to genome FASTA file: " CUSTOM_FASTA
+    read -p "Enter path to GTF annotation file: " CUSTOM_GTF
+    
+    # Expand tilde
+    CUSTOM_FASTA="${CUSTOM_FASTA/#\~/$HOME}"
+    CUSTOM_GTF="${CUSTOM_GTF/#\~/$HOME}"
+    
+    # Validate files
+    if [ ! -f "$CUSTOM_FASTA" ]; then
+        log_error "Reference FASTA not found: $CUSTOM_FASTA"
+        exit 1
+    fi
+    
+    if [ ! -f "$CUSTOM_GTF" ]; then
+        log_error "Reference GTF not found: $CUSTOM_GTF"
+        exit 1
+    fi
+    
+    REFERENCE_GENOME="$CUSTOM_FASTA"
+    REFERENCE_GTF="$CUSTOM_GTF"
+    
+    # Setup index paths for custom reference
+    local GENOME_BASENAME=$(basename "${REFERENCE_GENOME}" | sed 's/\.[^.]*$//')
+    local REF_DIR="$(dirname "$REFERENCE_GENOME")"
+    STAR_INDEX_DIR="${REF_DIR}/STAR_index_${GENOME_BASENAME}"
+    HISAT2_INDEX_DIR="${REF_DIR}/HISAT2_index_${GENOME_BASENAME}"
+    HISAT2_INDEX_PREFIX="${HISAT2_INDEX_DIR}/genome"
+    
+    log_success "Custom reference validated:"
+    log_info "FASTA: $REFERENCE_GENOME"
+    log_info "GTF: $REFERENCE_GTF"
+}
+
+# SMART reference selection - ALWAYS prompts, shows options based on what exists
+prompt_reference_selection() {
+    echo ""
+    echo "========================================"
+    echo "  Reference Genome Selection"
+    echo "========================================"
+    echo ""
+    
+    # Check what exists
+    local HAS_DEFAULT="no"
+    local HAS_PREVIOUS="no"
+    local PREV_FASTA=""
+    local PREV_GTF=""
+    
+    # Check for default reference
+    if [ -n "$DEFAULT_FASTA" ] && [ -f "$DEFAULT_FASTA" ] && [ -n "$DEFAULT_GTF" ] && [ -f "$DEFAULT_GTF" ]; then
+        HAS_DEFAULT="yes"
+    fi
+    
+    # Check for previous custom reference
+    if [ -f "$REF_CONFIG" ]; then
+        source "$REF_CONFIG"
+        if [ -n "$REFERENCE_FASTA" ] && [ -f "$REFERENCE_FASTA" ] && [ -n "$REFERENCE_GTF" ] && [ -f "$REFERENCE_GTF" ]; then
+            # Only consider it "previous" if it's NOT the default
+            if [ "$REFERENCE_FASTA" != "$DEFAULT_FASTA" ]; then
+                HAS_PREVIOUS="yes"
+                PREV_FASTA="$REFERENCE_FASTA"
+                PREV_GTF="$REFERENCE_GTF"
+            fi
+        fi
+    fi
+    
+    # Build options dynamically based on what exists
+    log_info "Select reference genome to use:"
+    echo ""
+    
+    local option_num=1
+    declare -A option_map
+    
+    # Option: Default (if exists)
+    if [ "$HAS_DEFAULT" = "yes" ]; then
+        echo "  ${option_num}) Default: GRCh38 (Ensembl 113) - found at ${DEFAULT_REFERENCE_DIR}"
+        option_map[$option_num]="default"
+        option_num=$((option_num + 1))
+    fi
+    
+    # Option: Previous custom (if exists)
+    if [ "$HAS_PREVIOUS" = "yes" ]; then
+        echo "  ${option_num}) Previous custom: $(basename $PREV_FASTA) and $(basename $PREV_GTF)"
+        option_map[$option_num]="previous"
+        option_num=$((option_num + 1))
+    fi
+    
+    # Option: New custom (always available)
+    echo "  ${option_num}) New custom: Enter new genome paths"
+    option_map[$option_num]="custom"
+    
+    echo ""
+    local max_option=$((option_num))
+    read -p "Enter choice [1-${max_option}]: " -n 1 -r CHOICE
+    echo
+    
+    # Validate choice
+    if [ -z "$CHOICE" ] || [ "$CHOICE" -lt 1 ] || [ "$CHOICE" -gt "$max_option" ]; then
+        log_error "Invalid choice"
+        exit 1
+    fi
+    
+    # Process choice
+    local selected_option="${option_map[$CHOICE]}"
+    
+    case "$selected_option" in
+        default)
+            REFERENCE_GENOME="$DEFAULT_FASTA"
+            REFERENCE_GTF="$DEFAULT_GTF"
+            STAR_INDEX_DIR="${DEFAULT_REFERENCE_DIR}/STAR_index"
+            HISAT2_INDEX_DIR="${DEFAULT_REFERENCE_DIR}/HISAT2_index"
+            HISAT2_INDEX_PREFIX="${HISAT2_INDEX_DIR}/genome"
+            log_success "Using default GRCh38 reference"
+            ;;
+            
+        previous)
+            REFERENCE_GENOME="$PREV_FASTA"
+            REFERENCE_GTF="$PREV_GTF"
+            
+            # Load index paths from previous config
+            if [ -f "$REF_CONFIG" ]; then
+                source "$REF_CONFIG"
+                STAR_INDEX_DIR="$STAR_INDEX_DIR"
+                HISAT2_INDEX_DIR="$HISAT2_INDEX_DIR"
+                HISAT2_INDEX_PREFIX="$HISAT2_INDEX_PREFIX"
+            else
+                # Fallback: construct index paths
+                local GENOME_BASENAME=$(basename "${REFERENCE_GENOME}" | sed 's/\.[^.]*$//')
+                local REF_DIR="$(dirname "$REFERENCE_GENOME")"
+                STAR_INDEX_DIR="${REF_DIR}/STAR_index_${GENOME_BASENAME}"
+                HISAT2_INDEX_DIR="${REF_DIR}/HISAT2_index_${GENOME_BASENAME}"
+                HISAT2_INDEX_PREFIX="${HISAT2_INDEX_DIR}/genome"
+            fi
+            
+            log_success "Using previous custom reference:"
+            log_info "FASTA: $REFERENCE_GENOME"
+            log_info "GTF: $REFERENCE_GTF"
+            ;;
+            
+        custom)
+            prompt_custom_reference_interactive
+            ;;
+            
+        *)
+            log_error "Invalid selection"
+            exit 1
+            ;;
+    esac
+    
+    # Save selection to config
+    update_reference_config
+}
+
+# Update reference config
+update_reference_config() {
+    mkdir -p "${SCRIPT_DIR}/config"
+    
+    cat > "$REF_CONFIG" << EOF
+# Reference Genome Configuration
+# Last modified: $(date)
+
+REFERENCE_FASTA="${REFERENCE_GENOME}"
+REFERENCE_GTF="${REFERENCE_GTF}"
+STAR_INDEX_DIR="${STAR_INDEX_DIR}"
+HISAT2_INDEX_DIR="${HISAT2_INDEX_DIR}"
+HISAT2_INDEX_PREFIX="${HISAT2_INDEX_PREFIX}"
+EOF
+}
+
+# Check reference genome - ALWAYS prompts unless CLI args provided
 check_reference() {
     log_info "Checking reference genome..."
     
@@ -323,747 +467,240 @@ check_reference() {
             exit 1
         fi
         
-        # Setup index paths for custom reference
+        # Setup index paths
         local GENOME_BASENAME=$(basename "${REFERENCE_GENOME}" | sed 's/\.[^.]*$//')
         local REF_DIR="$(dirname "$REFERENCE_GENOME")"
         STAR_INDEX_DIR="${REF_DIR}/STAR_index_${GENOME_BASENAME}"
         HISAT2_INDEX_DIR="${REF_DIR}/HISAT2_index_${GENOME_BASENAME}"
         HISAT2_INDEX_PREFIX="${HISAT2_INDEX_DIR}/genome"
         
-        log_success "Using CLI-specified custom reference:"
+        log_success "Using CLI-specified reference:"
         log_info "FASTA: $REFERENCE_GENOME"
         log_info "GTF: $REFERENCE_GTF"
+        
+        update_reference_config
         return 0
     fi
     
-    # Priority 2: Read from config (set by install.sh)
-    if [ ! -f "$REF_CONFIG" ]; then
-        log_error "Reference configuration not found: $REF_CONFIG"
-        log_error "Please run: bash install.sh"
+    # Priority 2: ALWAYS prompt for reference selection (interactive)
+    prompt_reference_selection
+    
+    # Validate selected reference
+    if [ ! -f "$REFERENCE_GENOME" ]; then
+        log_error "Reference genome not found: $REFERENCE_GENOME"
         exit 1
     fi
     
-    source "$REF_CONFIG"
-    
-    if [ -z "$REFERENCE_FASTA" ] || [ ! -f "$REFERENCE_FASTA" ]; then
-        log_error "Reference genome not found: $REFERENCE_FASTA"
-        log_error "Please run: bash install.sh"
-        exit 1
-    fi
-    
-    if [ -z "$REFERENCE_GTF" ] || [ ! -f "$REFERENCE_GTF" ]; then
+    if [ ! -f "$REFERENCE_GTF" ]; then
         log_error "Reference GTF not found: $REFERENCE_GTF"
-        log_error "Please run: bash install.sh"
         exit 1
     fi
-    
-    REFERENCE_GENOME="$REFERENCE_FASTA"
-    
-    if [ "$USE_CUSTOM_REFERENCE" = "yes" ]; then
-        log_success "Using configured custom reference:"
-    else
-        log_success "Using configured default reference:"
-    fi
-    log_info "FASTA: $REFERENCE_GENOME"
-    log_info "GTF: $REFERENCE_GTF"
 }
 
-
-# Check or build genome index
-check_or_build_index() {
-    case "$ALIGNER" in
-        star)
-            check_or_build_star_index
-            ;;
-        hisat2)
-            check_or_build_hisat2_index
-            ;;
-        both)
-            check_or_build_star_index
-            check_or_build_hisat2_index
-            ;;
-    esac
-}
-
-# Check or build STAR index
-check_or_build_star_index() {
+# Check and build STAR genome index
+check_star_index() {
     log_info "Checking STAR genome index..."
     
-    # Check if index directory exists AND contains the required genomeParameters.txt file
-    if [ ! -d "$STAR_INDEX_DIR" ] || [ -z "$(ls -A $STAR_INDEX_DIR 2>/dev/null)" ] || [ ! -f "${STAR_INDEX_DIR}/genomeParameters.txt" ]; then
-        log_warning "STAR index not found or incomplete"
-        build_star_index
-    else
-        log_success "STAR index found: $STAR_INDEX_DIR"
+    local INDEX_COMPLETE="${STAR_INDEX_DIR}/SA"
+    
+    if [ -f "$INDEX_COMPLETE" ]; then
+        log_success "STAR index found"
+        return 0
     fi
     
-    GENOME_INDEX_DIR="$STAR_INDEX_DIR"
-}
-
-# Check or build HISAT2 index
-check_or_build_hisat2_index() {
-    log_info "Checking HISAT2 genome index..."
-    
-    if [ ! -f "${HISAT2_INDEX_PREFIX}.1.ht2" ]; then
-        log_warning "HISAT2 index not found"
-        build_hisat2_index
-    else
-        log_success "HISAT2 index found: $HISAT2_INDEX_PREFIX"
-    fi
-}
-
-# Build STAR index with AUTO-CONTINUE
-build_star_index() {
+    log_warning "STAR index not found or incomplete"
     log_info "Building STAR genome index..."
     log_warning "This may take 30-60 minutes and requires ~32 GB RAM"
     
-    # AUTO-CONTINUE: Wait ${PROMPT_TIMEOUT} seconds, then proceed with 'y'
-    echo -ne "Build STAR index now? [Y/n] (auto-continue in ${PROMPT_TIMEOUT}s): "
-    read -t $PROMPT_TIMEOUT -n 1 -r REPLY || true
+    read -p "Build STAR index now? [Y/n] (auto-continue in 30s): " -t 30 -n 1 -r
     echo
     
-    if [ -z "$REPLY" ]; then
-        REPLY="y"
-        log_warning "No response in ${PROMPT_TIMEOUT}s, automatically proceeding with 'y'"
-    fi
-    
-    if [[ $REPLY =~ ^[Nn]$ ]]; then
-        log_error "STAR index required for alignment"
-        exit 1
-    fi
-    
-    mkdir -p "$STAR_INDEX_DIR"
-    
-    log_info "Running STAR genome index build..."
-    "$STAR_BIN" \
-        --runThreadN "$THREADS" \
-        --runMode genomeGenerate \
-        --genomeDir "$STAR_INDEX_DIR" \
-        --genomeFastaFiles "$REFERENCE_GENOME" \
-        --sjdbGTFfile "$REFERENCE_GTF" \
-        --sjdbOverhang 100 \
-        2>&1 | tee "${SCRIPT_DIR}/star_index_build.log"
-    
-    if [ $? -eq 0 ]; then
-        log_success "STAR index built successfully"
-        log_info "Index location: $STAR_INDEX_DIR"
+    if [[ ! $REPLY =~ ^[Nn]$ ]]; then
+        mkdir -p "$STAR_INDEX_DIR"
+        
+        log_info "Running STAR genome index build..."
+        "$STAR_BIN" --runThreadN "$THREADS" \
+            --runMode genomeGenerate \
+            --genomeDir "$STAR_INDEX_DIR" \
+            --genomeFastaFiles "$REFERENCE_GENOME" \
+            --sjdbGTFfile "$REFERENCE_GTF" \
+            --sjdbOverhang 100 2>&1 | tee "${SCRIPT_DIR}/star_index_build.log"
+        
+        if [ -f "$INDEX_COMPLETE" ]; then
+            log_success "STAR index built successfully"
+        else
+            log_error "STAR index build failed"
+            exit 1
+        fi
     else
-        log_error "STAR index build failed (check RAM - requires ~32GB)"
-        log_info "Check log: ${SCRIPT_DIR}/star_index_build.log"
+        log_error "STAR index is required for alignment"
         exit 1
     fi
 }
 
-# Build HISAT2 index with AUTO-CONTINUE and proper conda activation (ONLY IF NEEDED)
-build_hisat2_index() {
+# Check and build HISAT2 genome index
+check_hisat2_index() {
+    log_info "Checking HISAT2 genome index..."
+    
+    local INDEX_BASE="${HISAT2_INDEX_PREFIX}"
+    
+    if [ -f "${INDEX_BASE}.1.ht2" ]; then
+        log_success "HISAT2 index found"
+        return 0
+    fi
+    
+    log_warning "HISAT2 index not found"
     log_info "Building HISAT2 genome index..."
-    log_warning "This may take 30-45 minutes and requires ~8 GB RAM"
+    log_warning "This may take 20-40 minutes"
     
-    # AUTO-CONTINUE: Wait ${PROMPT_TIMEOUT} seconds, then proceed with 'y'
-    echo -ne "Build HISAT2 index now? [Y/n] (auto-continue in ${PROMPT_TIMEOUT}s): "
-    read -t $PROMPT_TIMEOUT -n 1 -r REPLY || true
+    read -p "Build HISAT2 index now? [Y/n] (auto-continue in 30s): " -t 30 -n 1 -r
     echo
     
-    if [ -z "$REPLY" ]; then
-        REPLY="y"
-        log_warning "No response in ${PROMPT_TIMEOUT}s, automatically proceeding with 'y'"
-    fi
-    
-    if [[ $REPLY =~ ^[Nn]$ ]]; then
-        log_error "HISAT2 index required for alignment"
-        exit 1
-    fi
-    
-    mkdir -p "$HISAT2_INDEX_DIR"
-    
-    # Check if we need conda or can use system Python
-    if [ "$USE_SYSTEM_PYTHON" = "yes" ]; then
-        log_info "Running HISAT2 genome index build with system Python..."
-        "$HISAT2_BUILD_BIN" \
-            -f "$REFERENCE_GENOME" \
-            -p "$THREADS" \
-            "$HISAT2_INDEX_PREFIX" \
-            2>&1 | tee "${SCRIPT_DIR}/hisat2_index_build.log"
-        local BUILD_STATUS=$?
-    else
-        log_info "Activating conda environment for HISAT2 index build..."
+    if [[ ! $REPLY =~ ^[Nn]$ ]]; then
+        mkdir -p "$HISAT2_INDEX_DIR"
         
-        set +u  # Temporarily disable unset variable check for conda
+        log_info "Running HISAT2 genome index build..."
+        "$HISAT2_BUILD_BIN" -p "$THREADS" "$REFERENCE_GENOME" "$INDEX_BASE" 2>&1 | tee "${SCRIPT_DIR}/hisat2_index_build.log"
         
-        if [ ! -f "${CONDA_DIR}/etc/profile.d/conda.sh" ]; then
-            log_error "Conda profile script not found"
+        if [ -f "${INDEX_BASE}.1.ht2" ]; then
+            log_success "HISAT2 index built successfully"
+        else
+            log_error "HISAT2 index build failed"
             exit 1
         fi
-        
-        source "${CONDA_DIR}/etc/profile.d/conda.sh"
-        
-        if ! conda activate "$CONDA_ENV_NAME" 2>/dev/null; then
-            log_error "Failed to activate conda environment: $CONDA_ENV_NAME"
-            log_error "Please run: ./install.sh --aligner hisat2"
-            exit 1
-        fi
-        
-        log_info "Running HISAT2 genome index build in conda environment '$CONDA_ENV_NAME'..."
-        "$HISAT2_BUILD_BIN" \
-            -f "$REFERENCE_GENOME" \
-            -p "$THREADS" \
-            "$HISAT2_INDEX_PREFIX" \
-            2>&1 | tee "${SCRIPT_DIR}/hisat2_index_build.log"
-        local BUILD_STATUS=$?
-        
-        conda deactivate
-        set -u  # Re-enable unset variable check
-    fi
-    
-    if [ $BUILD_STATUS -eq 0 ]; then
-        log_success "HISAT2 index built successfully"
-        log_info "Index location: $HISAT2_INDEX_DIR"
     else
-        log_error "HISAT2 index build failed"
-        log_info "Check log: ${SCRIPT_DIR}/hisat2_index_build.log"
+        log_error "HISAT2 index is required for alignment"
         exit 1
     fi
 }
 
-# Create output directories
-create_output_dirs() {
-    log_info "Creating output directory structure..."
+# Detect read layout
+detect_read_layout() {
+    log_info "Detecting read layout..."
     
-    mkdir -p "${OUTPUT_DIR}/logs"
-    mkdir -p "${OUTPUT_DIR}/temp"
+    local FIRST_FILE=$(find "$INPUT_DIR" -name "*.fastq.gz" -o -name "*.fq.gz" | head -n 1)
     
-    # Create aligner-specific directories if using both
-    if [ "$ALIGNER" = "both" ]; then
-        mkdir -p "${OUTPUT_DIR}/STAR"
-        mkdir -p "${OUTPUT_DIR}/HISAT2"
-        log_info "Created subdirectories for STAR and HISAT2"
-    fi
-    
-    log_success "Output directories created"
-}
-
-# Detect file naming pattern
-detect_pattern() {
-    local filename=$1
-    
-    if [[ "$filename" =~ _R1 ]] || [[ "$filename" =~ _r1 ]]; then
-        echo "_R1/_R2"
-    elif [[ "$filename" =~ _1\. ]] || [[ "$filename" =~ _1_ ]]; then
-        echo "_1/_2"
-    elif [[ "$filename" =~ _paired ]]; then
-        echo "_paired"
-    else
-        echo "unknown"
-    fi
-}
-
-# Find R2 file based on R1
-find_r2_file() {
-    local r1_file=$1
-    local r2_file=""
-    
-    # Try different patterns
-    if [[ "$r1_file" =~ _R1 ]]; then
-        r2_file=$(echo "$r1_file" | sed 's/_R1/_R2/g')
-    elif [[ "$r1_file" =~ _r1 ]]; then
-        r2_file=$(echo "$r1_file" | sed 's/_r1/_r2/g')
-    elif [[ "$r1_file" =~ _1\. ]]; then
-        r2_file=$(echo "$r1_file" | sed 's/_1\./_2./g')
-    elif [[ "$r1_file" =~ _1_ ]]; then
-        r2_file=$(echo "$r1_file" | sed 's/_1_/_2_/g')
-    elif [[ "$r1_file" =~ _paired ]]; then
-        r2_file=$(echo "$r1_file" | sed 's/_R1_paired/_R2_paired/g')
-    fi
-    
-    echo "$r2_file"
-}
-
-# STAR alignment for paired-end
-align_star_pe() {
-    local sample_id=$1
-    local r1_file=$2
-    local r2_file=$3
-    local subdir=$4  # Optional subdirectory (e.g., "STAR" when using both)
-    
-    log_info "Aligning sample: ${sample_id} (STAR)"
-    
-    local base_output="${OUTPUT_DIR}"
-    [ -n "$subdir" ] && base_output="${OUTPUT_DIR}/${subdir}"
-    
-    local output_prefix="${base_output}/${sample_id}/${sample_id}_"
-    mkdir -p "${base_output}/${sample_id}"
-    
-    "$STAR_BIN" \
-        --runThreadN "$THREADS" \
-        --limitBAMsortRAM 10000000000 \
-        --runMode alignReads \
-        --genomeDir "$STAR_INDEX_DIR" \
-        --readFilesIn "$r1_file" "$r2_file" \
-        --sjdbGTFfile "$REFERENCE_GTF" \
-        --sjdbOverhang 100 \
-        --alignSJDBoverhangMin 1 \
-        --outSAMtype BAM SortedByCoordinate \
-        --outFileNamePrefix "$output_prefix" \
-        --outFilterMultimapScoreRange 1 \
-        --outFilterMultimapNmax 20 \
-        --outFilterMismatchNmax 999 \
-        --alignIntronMax 1000000 \
-        --alignMatesGapMax 1000000 \
-        --outFilterMatchNminOverLread 0.66 \
-        --outFilterScoreMinOverLread 0.66 \
-        --outFilterType BySJout \
-        --chimSegmentMin 12 \
-        --chimJunctionOverhangMin 12 \
-        --outSAMstrandField intronMotif \
-        --outSAMattributes NH HI NM MD AS XS \
-        --outSAMunmapped Within \
-        --outReadsUnmapped Fastx \
-        --outSAMheaderHD @HD VN:1.4 \
-        2>&1 | tee "${OUTPUT_DIR}/logs/${sample_id}_star.log"
-    
-    if [ -f "${output_prefix}Aligned.sortedByCoord.out.bam" ]; then
-        log_info "Indexing BAM file..."
-        samtools index "${output_prefix}Aligned.sortedByCoord.out.bam"
-        log_success "STAR alignment completed: ${sample_id}"
-    else
-        log_error "STAR alignment failed: ${sample_id}"
-        return 1
-    fi
-}
-
-# HISAT2 alignment for paired-end
-align_hisat2_pe() {
-    local sample_id=$1
-    local r1_file=$2
-    local r2_file=$3
-    local subdir=$4  # Optional subdirectory
-    
-    log_info "Aligning sample: ${sample_id} (HISAT2)"
-    
-    local base_output="${OUTPUT_DIR}"
-    [ -n "$subdir" ] && base_output="${OUTPUT_DIR}/${subdir}"
-    
-    mkdir -p "${base_output}/${sample_id}"
-    
-    local output_sam="${base_output}/${sample_id}/${sample_id}.sam"
-    local output_bam="${base_output}/${sample_id}/${sample_id}.bam"
-    local output_sorted="${base_output}/${sample_id}/${sample_id}Aligned.sortedByCoord.out.bam"
-    
-    "$HISAT2_BIN" \
-        -q \
-        -x "$HISAT2_INDEX_PREFIX" \
-        -1 "$r1_file" \
-        -2 "$r2_file" \
-        --phred33 \
-        --summary-file "${OUTPUT_DIR}/logs/${sample_id}_hisat2_summary.txt" \
-        --met-file "${OUTPUT_DIR}/logs/${sample_id}_hisat2_metrics.txt" \
-        -p "$THREADS" \
-        --reorder \
-        -S "$output_sam" \
-        2>&1 | tee "${OUTPUT_DIR}/logs/${sample_id}_hisat2.log"
-    
-    if [ $? -eq 0 ] && [ -f "$output_sam" ]; then
-        log_info "Converting and sorting BAM..."
-        samtools view -bS "$output_sam" > "$output_bam"
-        samtools sort "$output_bam" -o "$output_sorted"
-        samtools index "$output_sorted"
-        rm -f "$output_sam" "$output_bam"
-        log_success "HISAT2 alignment completed: ${sample_id}"
-    else
-        log_error "HISAT2 alignment failed: ${sample_id}"
-        return 1
-    fi
-}
-
-# Process all samples with intelligent pattern detection
-process_all_samples() {
-    if [ "$PAIRED_END" = false ]; then
-        log_error "Single-end mode not yet implemented"
-        log_info "Currently only paired-end reads are supported"
-        exit 1
-    fi
-    
-    log_info "Scanning for paired-end samples in: $INPUT_DIR"
-    echo ""
-    
-    # Find ALL fastq files first to analyze naming patterns
-    local all_fastq_files=$(find "$INPUT_DIR" -type f \( -name "*.fastq" -o -name "*.fq" -o -name "*.fastq.gz" -o -name "*.fq.gz" \) | sort)
-    
-    if [ -z "$all_fastq_files" ]; then
+    if [ -z "$FIRST_FILE" ]; then
         log_error "No FASTQ files found in $INPUT_DIR"
         exit 1
     fi
     
-    # Detect naming pattern from first file
-    local first_file=$(echo "$all_fastq_files" | head -n 1)
-    local detected_pattern=""
-    
-    if [[ "$first_file" =~ _R1_ ]]; then
-        detected_pattern="_R1_/_R2_"
-    elif [[ "$first_file" =~ _r1_ ]]; then
-        detected_pattern="_r1_/_r2_"
-    elif [[ "$first_file" =~ _1\. ]] || [[ "$first_file" =~ _1_ ]]; then
-        detected_pattern="_1/_2"
+    # Check for paired-end pattern
+    if [[ "$FIRST_FILE" =~ _R1[_.]|_1[_.]|\.1[_.]|_F[_.] ]]; then
+        PAIRED_END=true
+        log_success "Detected: Paired-end reads"
     else
-        log_error "Unable to detect read pairing pattern"
-        log_info "Expected patterns: *_R1_*.fastq/*_R2_*.fastq, *_r1_*.fastq/*_r2_*.fastq, or *_1.fastq/*_2.fastq"
-        echo ""
-        log_info "Files found:"
-        echo "$all_fastq_files" | head -n 5
-        echo ""
-        log_error "Please rename your files to follow one of the expected patterns"
-        exit 1
-    fi
-    
-    # Display detection results
-    echo "========================================"
-    echo "  Pairing Pattern Detection"
-    echo "========================================"
-    log_success "Detected pattern: ${detected_pattern}"
-    echo ""
-    
-    # Find R1 files based on detected pattern
-    local r1_files=""
-    case "$detected_pattern" in
-        "_R1_/_R2_")
-            r1_files=$(find "$INPUT_DIR" -type f \( -name "*_R1_*.fastq" -o -name "*_R1_*.fq" -o -name "*_R1_*.fastq.gz" -o -name "*_R1_*.fq.gz" \) | sort)
-            ;;
-        "_r1_/_r2_")
-            r1_files=$(find "$INPUT_DIR" -type f \( -name "*_r1_*.fastq" -o -name "*_r1_*.fq" -o -name "*_r1_*.fastq.gz" -o -name "*_r1_*.fq.gz" \) | sort)
-            ;;
-        "_1/_2")
-            r1_files=$(find "$INPUT_DIR" -type f \( -name "*_1.fastq" -o -name "*_1.fq" -o -name "*_1.fastq.gz" -o -name "*_1.fq.gz" \) | sort)
-            ;;
-    esac
-    
-    if [ -z "$r1_files" ]; then
-        log_error "No R1 files found matching pattern: ${detected_pattern}"
-        exit 1
-    fi
-    
-    # Count total samples
-    local total_r1=$(echo "$r1_files" | wc -l)
-    local total_r2=$(echo "$all_fastq_files" | grep -E "(_R2_|_r2_|_2\.)" | wc -l)
-    
-    log_info "Found ${total_r1} R1 files and ${total_r2} R2 files"
-    echo ""
-    
-    # Show sample list preview
-    log_info "Sample preview (first 3):"
-    local count=0
-    for r1_file in $r1_files; do
-        count=$((count + 1))
-        if [ $count -le 3 ]; then
-            local basename=$(basename "$r1_file")
-            local sample_id=$(echo "$basename" | sed -E 's/_(R1|r1|1).*//g')
-            local r2_file=$(find_r2_file "$r1_file")
-            
-            echo "  Sample ${count}: ${sample_id}"
-            echo "    R1: $(basename $r1_file)"
-            if [ -f "$r2_file" ]; then
-                echo "    R2: $(basename $r2_file) ✓"
-            else
-                echo "    R2: NOT FOUND ✗"
-            fi
-        fi
-    done
-    
-    echo ""
-    echo "========================================"
-    echo ""
-    
-    # Confirmation prompt with timeout
-    log_warning "Please verify the detected pattern is correct"
-    echo ""
-    echo "If the pattern detection is INCORRECT:"
-    echo "  1. Press Ctrl+C to abort"
-    echo "  2. Rename your files to follow the expected pattern"
-    echo "  3. Re-run this script"
-    echo ""
-    echo "Expected naming:"
-    echo "  - Pattern: SampleID_R1_*.fastq / SampleID_R2_*.fastq"
-    echo "  - Example: SRR1045522_R1_paired.fastq / SRR1045522_R2_paired.fastq"
-    echo ""
-    
-    # Auto-continue after timeout
-    local continue_timeout=30
-    echo -ne "Continue with detected pattern? [Y/n] (auto-continue in ${continue_timeout}s): "
-    read -t $continue_timeout -n 1 -r REPLY || true
-    echo
-    
-    if [ -z "$REPLY" ]; then
-        REPLY="y"
-        log_info "Auto-continuing after ${continue_timeout}s timeout"
-    fi
-    
-    if [[ $REPLY =~ ^[Nn]$ ]]; then
-        log_info "Alignment cancelled by user"
-        echo ""
-        log_info "To fix naming issues:"
-        echo "  1. Ensure R1 files contain: _R1_ (uppercase) or _r1_ (lowercase)"
-        echo "  2. Ensure R2 files contain: _R2_ (uppercase) or _r2_ (lowercase)"
-        echo "  3. Alternative: Use _1.fastq / _2.fastq naming"
-        exit 0
-    fi
-    
-    echo ""
-    log_info "Starting alignment for ${total_r1} samples..."
-    echo ""
-    
-    # Process each sample
-    local processed_count=0
-    local failed_count=0
-    
-    for r1_file in $r1_files; do
-        local basename=$(basename "$r1_file")
-        local sample_id=$(echo "$basename" | sed -E 's/_(R1|r1|1).*//g')
-        local r2_file=$(find_r2_file "$r1_file")
-        
-        if [ ! -f "$r2_file" ]; then
-            log_warning "R2 not found for $sample_id, skipping..."
-            log_warning "Expected: $r2_file"
-            failed_count=$((failed_count + 1))
-            continue
-        fi
-        
-        processed_count=$((processed_count + 1))
-        
-        echo ""
-        log_info "========================================="
-        log_info "Sample ${processed_count}/${total_r1}: ${sample_id}"
-        log_info "========================================="
-        log_info "Pattern: ${detected_pattern}"
-        log_info "R1: $(basename $r1_file)"
-        log_info "R2: $(basename $r2_file)"
-        echo ""
-        
-        case "$ALIGNER" in
-            star)
-                align_star_pe "$sample_id" "$r1_file" "$r2_file" "" || failed_count=$((failed_count + 1))
-                ;;
-            hisat2)
-                align_hisat2_pe "$sample_id" "$r1_file" "$r2_file" "" || failed_count=$((failed_count + 1))
-                ;;
-            both)
-                log_info "Running alignment with BOTH aligners..."
-                align_star_pe "$sample_id" "$r1_file" "$r2_file" "STAR" || failed_count=$((failed_count + 1))
-                align_hisat2_pe "$sample_id" "$r1_file" "$r2_file" "HISAT2" || failed_count=$((failed_count + 1))
-                ;;
-        esac
-    done
-    
-    echo ""
-    log_success "Processed ${processed_count} of ${total_r1} samples"
-    
-    if [ $failed_count -gt 0 ]; then
-        log_warning "${failed_count} samples skipped or failed"
-    fi
-    
-    if [ $processed_count -eq 0 ]; then
-        log_error "No valid sample pairs found and processed"
-        exit 1
+        PAIRED_END=false
+        log_success "Detected: Single-end reads"
     fi
 }
 
-# Process samples from file
-process_samples_from_file() {
-    log_info "Processing samples from: $SAMPLE_FILE"
-    
-    if [ ! -f "$SAMPLE_FILE" ]; then
-        log_error "Sample file not found: $SAMPLE_FILE"
-        exit 1
+# Generate sample list
+generate_sample_list() {
+    if [ -n "$SAMPLE_FILE" ] && [ -f "$SAMPLE_FILE" ]; then
+        log_info "Using provided sample list: $SAMPLE_FILE"
+        return 0
     fi
     
-    local sample_count=0
-    while IFS= read -r sample_id; do
-        [[ -z "$sample_id" || "$sample_id" =~ ^#.*$ ]] && continue
-        
-        sample_count=$((sample_count + 1))
-        
-        echo ""
-        log_info "========================================="
-        log_info "Sample ${sample_count}: ${sample_id}"
-        log_info "========================================="
-        
-        # Find R1 file
-        local r1_file=$(find "$INPUT_DIR" -type f \( -name "${sample_id}*_R1*.fastq" -o -name "${sample_id}*_R1*.fq" -o -name "${sample_id}*_R1*.fastq.gz" -o -name "${sample_id}*_1.fastq" -o -name "${sample_id}*_1.fq" \) | head -n 1)
-        
-        if [ -z "$r1_file" ] || [ ! -f "$r1_file" ]; then
-            log_error "R1 file not found for: ${sample_id}"
-            continue
-        fi
-        
-        # Find R2 file
-        local r2_file=$(find_r2_file "$r1_file")
-        local pattern=$(detect_pattern "$r1_file")
-        
-        if [ ! -f "$r2_file" ]; then
-            log_error "R2 not found for: ${sample_id} (pattern: ${pattern})"
-            continue
-        fi
-        
-        log_info "Pattern: ${pattern}"
-        log_info "R1: $r1_file"
-        log_info "R2: $r2_file"
-        
-        # Align
-        case "$ALIGNER" in
-            star)
-                align_star_pe "$sample_id" "$r1_file" "$r2_file" ""
-                ;;
-            hisat2)
-                align_hisat2_pe "$sample_id" "$r1_file" "$r2_file" ""
-                ;;
-            both)
-                log_info "Running with BOTH aligners..."
-                align_star_pe "$sample_id" "$r1_file" "$r2_file" "STAR"
-                align_hisat2_pe "$sample_id" "$r1_file" "$r2_file" "HISAT2"
-                ;;
-        esac
-    done < "$SAMPLE_FILE"
+    log_info "Generating sample list..."
     
-    log_success "Processed ${sample_count} samples"
-}
-
-# Generate summary
-generate_summary() {
-    log_info "Generating summary..."
+    SAMPLE_FILE="${OUTPUT_DIR}/sample_list.txt"
+    mkdir -p "$(dirname "$SAMPLE_FILE")"
     
-    local summary_file="${OUTPUT_DIR}/alignment_summary.txt"
-    
-    cat > "$summary_file" << EOF
-========================================
-Alignment Module Summary
-========================================
-
-Date: $(date)
-Input Directory: ${INPUT_DIR}
-Output Directory: ${OUTPUT_DIR}
-Aligner: ${ALIGNER^^}
-Reference: ${REFERENCE_GENOME}
-GTF: ${REFERENCE_GTF}
-Threads: ${THREADS}
-
-Output Structure:
-$(if [ "$ALIGNER" = "both" ]; then
-    echo "  STAR results: ${OUTPUT_DIR}/STAR/[sample]/"
-    echo "  HISAT2 results: ${OUTPUT_DIR}/HISAT2/[sample]/"
-else
-    echo "  Aligned BAM files: ${OUTPUT_DIR}/[sample]/"
-fi)
-  Logs: ${OUTPUT_DIR}/logs/
-
-Next Steps:
-  - Check BAM files in sample directories
-  - Review alignment logs
-  - Proceed with quantification
-
-========================================
-EOF
-    
-    log_success "Summary: $summary_file"
-}
-
-# Display final summary
-display_final_summary() {
-    echo ""
-    echo "========================================"
-    echo "  Alignment Complete"
-    echo "========================================"
-    echo ""
-    log_success "All alignments completed!"
-    echo ""
-    log_info "Aligner(s) used: ${ALIGNER^^}"
-    log_info "Results: ${OUTPUT_DIR}"
-    echo ""
-    
-    if [ "$ALIGNER" = "both" ]; then
-        log_info "Output structure (BOTH aligners):"
-        echo "  STAR results: ${OUTPUT_DIR}/STAR/[sample]/"
-        echo "  HISAT2 results: ${OUTPUT_DIR}/HISAT2/[sample]/"
+    if [ "$PAIRED_END" = true ]; then
+        find "$INPUT_DIR" -name "*_R1*.fastq.gz" -o -name "*_1.fastq.gz" | \
+            sed 's/_R1.*//;s/_1\..*//' | sort -u > "$SAMPLE_FILE"
     else
-        log_info "Output structure:"
-        echo "  BAM files: ${OUTPUT_DIR}/[sample]/*Aligned.sortedByCoord.out.bam"
-        echo "  BAM index: ${OUTPUT_DIR}/[sample]/*Aligned.sortedByCoord.out.bam.bai"
+        find "$INPUT_DIR" -name "*.fastq.gz" | \
+            sed 's/\.fastq\.gz$//' | sort -u > "$SAMPLE_FILE"
     fi
     
-    echo "  Logs: ${OUTPUT_DIR}/logs/"
-    echo ""
-    log_info "Next steps:"
-    echo "  - Visualize: IGV or samtools view"
-    echo "  - Quantify: featureCounts, RSEM, or Salmon"
-    echo "  - QC: samtools flagstat, Qualimap"
-    echo ""
-    echo "========================================"
+    local SAMPLE_COUNT=$(wc -l < "$SAMPLE_FILE")
+    log_success "Found $SAMPLE_COUNT samples"
 }
 
-# Parse arguments
-parse_arguments() {
-    if [ $# -eq 0 ]; then
-        usage
+# Run STAR alignment
+run_star_alignment() {
+    local SAMPLE=$1
+    local SAMPLE_NAME=$(basename "$SAMPLE")
+    
+    log_info "Running STAR alignment for: $SAMPLE_NAME"
+    
+    local STAR_OUTPUT="${OUTPUT_DIR}/STAR/${SAMPLE_NAME}"
+    mkdir -p "$STAR_OUTPUT"
+    
+    local READ1="${SAMPLE}_R1.fastq.gz"
+    local READ2="${SAMPLE}_R2.fastq.gz"
+    
+    if [ "$PAIRED_END" = true ]; then
+        "$STAR_BIN" --runThreadN "$THREADS" \
+            --genomeDir "$STAR_INDEX_DIR" \
+            --readFilesIn "$READ1" "$READ2" \
+            --readFilesCommand zcat \
+            --outFileNamePrefix "${STAR_OUTPUT}/" \
+            --outSAMtype BAM SortedByCoordinate \
+            --outSAMattributes NH HI AS nM NM MD \
+            --quantMode GeneCounts
+    else
+        "$STAR_BIN" --runThreadN "$THREADS" \
+            --genomeDir "$STAR_INDEX_DIR" \
+            --readFilesIn "$READ1" \
+            --readFilesCommand zcat \
+            --outFileNamePrefix "${STAR_OUTPUT}/" \
+            --outSAMtype BAM SortedByCoordinate \
+            --outSAMattributes NH HI AS nM NM MD \
+            --quantMode GeneCounts
     fi
     
-    while [[ $# -gt 0 ]]; do
-        case $1 in
-            -i|--input)
-                INPUT_DIR="$2"
-                shift 2 ;;
-            -o|--output)
-                OUTPUT_DIR="$2"
-                shift 2 ;;
-            -s|--samples)
-                SAMPLE_FILE="$2"
-                shift 2 ;;
-            -t|--threads)
-                THREADS="$2"
-                shift 2 ;;
-            --aligner)
-                ALIGNER="$2"
-                shift 2 ;;
-            --reference)
-                REFERENCE_GENOME="$2"
-                shift 2 ;;
-            --gtf)
-                REFERENCE_GTF="$2"
-                shift 2 ;;
-            --reference-default)
-                USE_DEFAULT_REF="yes"
-                shift ;;
-            --reference-previous)
-                USE_PREVIOUS_REF="yes"
-                shift ;;
-            --single-end)
-                PAIRED_END=false
-                shift ;;
-            -h|--help)
-                usage ;;
-            *)
-                log_error "Unknown option: $1"
-                usage ;;
-        esac
-    done
+    # Index BAM
+    "$SAMTOOLS_BIN" index "${STAR_OUTPUT}/Aligned.sortedByCoord.out.bam"
     
-    # Validate required arguments
-    if [ -z "$INPUT_DIR" ] || [ -z "$OUTPUT_DIR" ]; then
-        log_error "Input and output directories are required"
-        usage
-    fi
-    
-    if [ ! -d "$INPUT_DIR" ]; then
-        log_error "Input directory not found: $INPUT_DIR"
-        exit 1
-    fi
+    log_success "STAR alignment complete: $SAMPLE_NAME"
 }
 
-# Main
+# Run HISAT2 alignment
+run_hisat2_alignment() {
+    local SAMPLE=$1
+    local SAMPLE_NAME=$(basename "$SAMPLE")
+    
+    log_info "Running HISAT2 alignment for: $SAMPLE_NAME"
+    
+    local HISAT2_OUTPUT="${OUTPUT_DIR}/HISAT2/${SAMPLE_NAME}"
+    mkdir -p "$HISAT2_OUTPUT"
+    
+    local READ1="${SAMPLE}_R1.fastq.gz"
+    local READ2="${SAMPLE}_R2.fastq.gz"
+    local BAM_FILE="${HISAT2_OUTPUT}/aligned.bam"
+    
+    if [ "$PAIRED_END" = true ]; then
+        "$HISAT2_BIN" -p "$THREADS" \
+            -x "$HISAT2_INDEX_PREFIX" \
+            -1 "$READ1" \
+            -2 "$READ2" \
+            --summary-file "${HISAT2_OUTPUT}/alignment_summary.txt" | \
+            "$SAMTOOLS_BIN" view -bS - | \
+            "$SAMTOOLS_BIN" sort -@ "$THREADS" -o "$BAM_FILE"
+    else
+        "$HISAT2_BIN" -p "$THREADS" \
+            -x "$HISAT2_INDEX_PREFIX" \
+            -U "$READ1" \
+            --summary-file "${HISAT2_OUTPUT}/alignment_summary.txt" | \
+            "$SAMTOOLS_BIN" view -bS - | \
+            "$SAMTOOLS_BIN" sort -@ "$THREADS" -o "$BAM_FILE"
+    fi
+    
+    # Index BAM
+    "$SAMTOOLS_BIN" index "$BAM_FILE"
+    
+    log_success "HISAT2 alignment complete: $SAMPLE_NAME"
+}
+
+# Main execution
 main() {
     echo "========================================"
     echo "  Alignment Module"
     echo "========================================"
     echo ""
-    
-    # Parse arguments
-    parse_arguments "$@"
     
     # Check installation
     check_installation
@@ -1073,49 +710,49 @@ main() {
         prompt_aligner_selection
     fi
     
-    # Verify selected aligner is available
-    verify_aligner
+    # Check aligner availability
+    check_aligner_availability
     
     # Check reference genome
     check_reference
     
-    # Check or build index
-    check_or_build_index
-    
-    # Create output directories
-    create_output_dirs
-    
-    # Log start
-    local start_time=$(date +%s)
-    log_info "Started: $(date)"
-    log_info "Aligner: ${ALIGNER^^}"
-    log_info "Threads: $THREADS"
-    
-    # Process samples
-    echo ""
-    if [ -n "$SAMPLE_FILE" ]; then
-        process_samples_from_file
-    else
-        process_all_samples
+    # Check/build genome indices
+    if [[ "$ALIGNER" == "star" || "$ALIGNER" == "both" ]]; then
+        check_star_index
     fi
     
-    # Generate summary
+    if [[ "$ALIGNER" == "hisat2" || "$ALIGNER" == "both" ]]; then
+        check_hisat2_index
+    fi
+    
+    # Detect read layout
+    detect_read_layout
+    
+    # Generate sample list
+    generate_sample_list
+    
+    # Create output directory
+    mkdir -p "$OUTPUT_DIR"
+    
+    # Run alignment for each sample
+    log_info "Starting alignment..."
+    
+    while IFS= read -r SAMPLE; do
+        if [[ "$ALIGNER" == "star" || "$ALIGNER" == "both" ]]; then
+            run_star_alignment "$SAMPLE"
+        fi
+        
+        if [[ "$ALIGNER" == "hisat2" || "$ALIGNER" == "both" ]]; then
+            run_hisat2_alignment "$SAMPLE"
+        fi
+    done < "$SAMPLE_FILE"
+    
     echo ""
-    generate_summary
-    
-    # Calculate runtime
-    local end_time=$(date +%s)
-    local runtime=$((end_time - start_time))
-    local hours=$((runtime / 3600))
-    local minutes=$(((runtime % 3600) / 60))
-    local seconds=$((runtime % 60))
-    
-    log_info "Completed: $(date)"
-    log_info "Runtime: ${hours}h ${minutes}m ${seconds}s"
-    
-    # Display summary
-    display_final_summary
+    log_success "Alignment complete!"
+    log_info "Output directory: $OUTPUT_DIR"
+    echo ""
 }
 
-# Run main
-main "$@"
+# Parse arguments and run
+parse_args "$@"
+main
