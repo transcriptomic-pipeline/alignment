@@ -579,7 +579,6 @@ check_reference() {
         fi
         
         REFERENCE_GENOME="$REFERENCE_FASTA"
-        REFERENCE_GTF="$REFERENCE_GTF"
         
         if [ "$USE_CUSTOM_REFERENCE" = "yes" ]; then
             log_success "Using previous custom reference:"
@@ -592,7 +591,31 @@ check_reference() {
         return 0
     fi
     
-    # Priority 4: Interactive mode - prompt for reference selection
+    # Priority 4: Check if reference is already configured (from install.sh)
+    if [ -f "$REF_CONFIG" ]; then
+        source "$REF_CONFIG"
+        
+        # Check if reference files exist
+        if [ -n "$REFERENCE_FASTA" ] && [ -f "$REFERENCE_FASTA" ] && [ -n "$REFERENCE_GTF" ] && [ -f "$REFERENCE_GTF" ]; then
+            # Reference is already configured - ASK USER if they want to use it or change it
+            prompt_reference_selection
+            
+            # After prompt, validate selected reference
+            if [ ! -f "$REFERENCE_GENOME" ]; then
+                log_error "Reference genome not found: $REFERENCE_GENOME"
+                exit 1
+            fi
+            
+            if [ ! -f "$REFERENCE_GTF" ]; then
+                log_error "Reference GTF not found: $REFERENCE_GTF"
+                exit 1
+            fi
+            
+            return 0
+        fi
+    fi
+    
+    # Priority 5: No configuration exists - prompt for first-time setup
     prompt_reference_selection
     
     # Validate selected reference
