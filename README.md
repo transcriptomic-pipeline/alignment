@@ -5,6 +5,7 @@ Alignment of transcriptomic reads with human reference genome using STAR and HIS
 
 [![Version](https://img.shields.io/badge/version-1.0.0-blue.svg)](https://github.com/yourusername/alignment-module/releases/tag/v1.0.0)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
+![Platform](https://img.shields.io/badge/platform-Linux%20%7C%20-lightgrey)
 
 A production-ready RNA-seq alignment module supporting STAR and HISAT2 aligners with automatic installation, intelligent file detection, and seamless integration with upstream QC modules.
 
