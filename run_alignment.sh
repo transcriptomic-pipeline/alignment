@@ -262,197 +262,6 @@ prompt_aligner_selection() {
     log_success "Selected aligner: ${ALIGNER^^}"
 }
 
-# Prompt user to select/confirm reference genome
-prompt_reference_selection() {
-    echo ""
-    echo "========================================"
-    echo "  Reference Genome Selection"
-    echo "========================================"
-    echo ""
-    
-    # Check if there's a remembered reference
-    local HAS_PREVIOUS="no"
-    local PREV_TYPE=""
-    local PREV_FASTA=""
-    local PREV_GTF=""
-    
-    if [ -f "$REF_CONFIG" ]; then
-        source "$REF_CONFIG"
-        if [ -n "$REFERENCE_FASTA" ] && [ -f "$REFERENCE_FASTA" ]; then
-            HAS_PREVIOUS="yes"
-            PREV_TYPE="$USE_CUSTOM_REFERENCE"
-            PREV_FASTA="$REFERENCE_FASTA"
-            PREV_GTF="$REFERENCE_GTF"
-        fi
-    fi
-    
-    # Show options
-    log_info "Select reference genome to use:"
-    echo ""
-    echo "  1) Default: Human GRCh38 (Ensembl 113)"
-    
-    if [ "$HAS_PREVIOUS" = "yes" ]; then
-        if [ "$PREV_TYPE" = "yes" ]; then
-            echo "  2) Previous custom: $(basename $PREV_FASTA)"
-        else
-            echo "  2) Previous default: GRCh38 (Ensembl 113)"
-        fi
-        echo "  3) New custom reference"
-    else
-        echo "  2) Custom reference"
-    fi
-    
-    echo ""
-    
-    # Get user choice with timeout
-    local timeout=30
-    echo -ne "Enter choice [1-"
-    [ "$HAS_PREVIOUS" = "yes" ] && echo -ne "3" || echo -ne "2"
-    echo -ne "] (default: "
-    [ "$HAS_PREVIOUS" = "yes" ] && echo -ne "2" || echo -ne "1"
-    echo -ne ", auto-select in ${timeout}s): "
-    
-    read -t $timeout -n 1 -r REPLY || true
-    echo
-    
-    # Default behavior
-    if [ -z "$REPLY" ]; then
-        if [ "$HAS_PREVIOUS" = "yes" ]; then
-            REPLY="2"
-            log_info "No response in ${timeout}s, using previous reference"
-        else
-            REPLY="1"
-            log_info "No response in ${timeout}s, using default (GRCh38)"
-        fi
-    fi
-    
-    # Handle selection
-    case "${REPLY}" in
-        1)
-            # Use default GRCh38
-            USE_CUSTOM_REFERENCE="no"
-            REFERENCE_GENOME="${SCRIPT_DIR}/references/GRCh38_ensembl113/Homo_sapiens.GRCh38.dna.primary_assembly.fa"
-            REFERENCE_GTF="${SCRIPT_DIR}/references/GRCh38_ensembl113/Homo_sapiens.GRCh38.113.gtf"
-            STAR_INDEX_DIR="${SCRIPT_DIR}/references/GRCh38_ensembl113/STAR_index"
-            HISAT2_INDEX_DIR="${SCRIPT_DIR}/references/GRCh38_ensembl113/HISAT2_index"
-            HISAT2_INDEX_PREFIX="${HISAT2_INDEX_DIR}/genome"
-            
-            # Update config
-            update_reference_config
-            
-            log_success "Selected: Default GRCh38 (Ensembl 113)"
-            log_info "FASTA: $(basename $REFERENCE_GENOME)"
-            log_info "GTF: $(basename $REFERENCE_GTF)"
-            ;;
-            
-        2)
-            if [ "$HAS_PREVIOUS" = "yes" ]; then
-                # Use previous reference
-                USE_CUSTOM_REFERENCE="$PREV_TYPE"
-                REFERENCE_GENOME="$PREV_FASTA"
-                REFERENCE_GTF="$PREV_GTF"
-                
-                # Load index paths from config
-                source "$REF_CONFIG"
-                
-                log_success "Using previous reference"
-                log_info "FASTA: $REFERENCE_GENOME"
-                log_info "GTF: $REFERENCE_GTF"
-            else
-                # Prompt for custom reference
-                prompt_custom_reference_interactive
-            fi
-            ;;
-            
-        3)
-            if [ "$HAS_PREVIOUS" = "yes" ]; then
-                # Prompt for new custom reference
-                prompt_custom_reference_interactive
-            else
-                log_error "Invalid choice"
-                exit 1
-            fi
-            ;;
-            
-        *)
-            log_error "Invalid choice. Please select a valid option."
-            exit 1
-            ;;
-    esac
-    
-    echo ""
-}
-
-# Prompt for custom reference paths
-prompt_custom_reference_interactive() {
-    echo ""
-    log_info "Custom reference genome configuration"
-    echo ""
-    
-    # Prompt for FASTA
-    read -p "Enter path to genome FASTA file: " CUSTOM_FASTA
-    CUSTOM_FASTA="${CUSTOM_FASTA/#\~/$HOME}"
-    
-    # Validate FASTA
-    if [ ! -f "$CUSTOM_FASTA" ]; then
-        log_error "FASTA file not found: $CUSTOM_FASTA"
-        echo ""
-        log_info "Please provide a valid path and re-run."
-        exit 1
-    fi
-    
-    # Prompt for GTF
-    read -p "Enter path to GTF annotation file: " CUSTOM_GTF
-    CUSTOM_GTF="${CUSTOM_GTF/#\~/$HOME}"
-    
-    # Validate GTF
-    if [ ! -f "$CUSTOM_GTF" ]; then
-        log_error "GTF file not found: $CUSTOM_GTF"
-        echo ""
-        log_info "Please provide a valid path and re-run."
-        exit 1
-    fi
-    
-    # Set variables
-    USE_CUSTOM_REFERENCE="yes"
-    REFERENCE_GENOME="$CUSTOM_FASTA"
-    REFERENCE_GTF="$CUSTOM_GTF"
-    
-    # Create index paths based on genome basename
-    local GENOME_BASENAME=$(basename "${REFERENCE_GENOME}" | sed 's/\.[^.]*$//')
-    local REF_DIR="$(dirname "$REFERENCE_GENOME")"
-    STAR_INDEX_DIR="${REF_DIR}/STAR_index_${GENOME_BASENAME}"
-    HISAT2_INDEX_DIR="${REF_DIR}/HISAT2_index_${GENOME_BASENAME}"
-    HISAT2_INDEX_PREFIX="${HISAT2_INDEX_DIR}/genome"
-    
-    # Update config
-    update_reference_config
-    
-    log_success "Custom reference configured:"
-    log_info "FASTA: $REFERENCE_GENOME"
-    log_info "GTF: $REFERENCE_GTF"
-    log_info "Index base: ${GENOME_BASENAME}"
-}
-
-# Update reference configuration file
-update_reference_config() {
-    mkdir -p "${SCRIPT_DIR}/config"
-    
-    cat > "$REF_CONFIG" << EOF
-# Reference Genome Configuration
-# Generated: $(date)
-# Last modified by: run_alignment.sh
-
-USE_CUSTOM_REFERENCE="${USE_CUSTOM_REFERENCE}"
-REFERENCE_DIR="$(dirname "$REFERENCE_GENOME")"
-REFERENCE_FASTA="${REFERENCE_GENOME}"
-REFERENCE_GTF="${REFERENCE_GTF}"
-STAR_INDEX_DIR="${STAR_INDEX_DIR}"
-HISAT2_INDEX_DIR="${HISAT2_INDEX_DIR}"
-HISAT2_INDEX_PREFIX="${HISAT2_INDEX_PREFIX}"
-EOF
-}
-
 # Verify aligner is available
 verify_aligner() {
     local need_star=false
@@ -500,7 +309,6 @@ verify_aligner() {
 }
 
 # Check reference genome
-# Check reference genome
 check_reference() {
     log_info "Checking reference genome..."
     
@@ -522,116 +330,44 @@ check_reference() {
         HISAT2_INDEX_DIR="${REF_DIR}/HISAT2_index_${GENOME_BASENAME}"
         HISAT2_INDEX_PREFIX="${HISAT2_INDEX_DIR}/genome"
         
-        # Update config
-        USE_CUSTOM_REFERENCE="yes"
-        update_reference_config
-        
         log_success "Using CLI-specified custom reference:"
         log_info "FASTA: $REFERENCE_GENOME"
         log_info "GTF: $REFERENCE_GTF"
         return 0
     fi
     
-    # Priority 2: Use default reference (--reference-default flag)
-    if [ "$USE_DEFAULT_REF" = "yes" ]; then
-        USE_CUSTOM_REFERENCE="no"
-        REFERENCE_GENOME="${SCRIPT_DIR}/references/GRCh38_ensembl113/Homo_sapiens.GRCh38.dna.primary_assembly.fa"
-        REFERENCE_GTF="${SCRIPT_DIR}/references/GRCh38_ensembl113/Homo_sapiens.GRCh38.113.gtf"
-        STAR_INDEX_DIR="${SCRIPT_DIR}/references/GRCh38_ensembl113/STAR_index"
-        HISAT2_INDEX_DIR="${SCRIPT_DIR}/references/GRCh38_ensembl113/HISAT2_index"
-        HISAT2_INDEX_PREFIX="${HISAT2_INDEX_DIR}/genome"
-        
-        # Update config
-        update_reference_config
-        
-        log_success "Using default reference: GRCh38 (Ensembl 113)"
-        log_info "FASTA: $(basename $REFERENCE_GENOME)"
-        log_info "GTF: $(basename $REFERENCE_GTF)"
-        
-        # Validate files exist
-        if [ ! -f "$REFERENCE_GENOME" ]; then
-            log_error "Default reference not found: $REFERENCE_GENOME"
-            log_info "Please run: bash install.sh --download-reference"
-            exit 1
-        fi
-        if [ ! -f "$REFERENCE_GTF" ]; then
-            log_error "Default GTF not found: $REFERENCE_GTF"
-            log_info "Please run: bash install.sh --download-reference"
-            exit 1
-        fi
-        
-        return 0
-    fi
-    
-    # Priority 3: Use previous reference (--reference-previous flag)
-    if [ "$USE_PREVIOUS_REF" = "yes" ]; then
-        if [ ! -f "$REF_CONFIG" ]; then
-            log_error "No previous reference configuration found"
-            log_info "Please run without --reference-previous to configure reference"
-            exit 1
-        fi
-        
-        source "$REF_CONFIG"
-        
-        if [ ! -f "$REFERENCE_FASTA" ]; then
-            log_error "Previous reference not found: $REFERENCE_FASTA"
-            log_info "Please reconfigure reference"
-            exit 1
-        fi
-        
-        REFERENCE_GENOME="$REFERENCE_FASTA"
-        
-        if [ "$USE_CUSTOM_REFERENCE" = "yes" ]; then
-            log_success "Using previous custom reference:"
-        else
-            log_success "Using previous default reference:"
-        fi
-        log_info "FASTA: $REFERENCE_GENOME"
-        log_info "GTF: $REFERENCE_GTF"
-        
-        return 0
-    fi
-    
-    # Priority 4: Check if reference is already configured (from install.sh) - USE IT WITHOUT PROMPTING
-    if [ -f "$REF_CONFIG" ]; then
-        source "$REF_CONFIG"
-        
-        # Check if reference files exist
-        if [ -n "$REFERENCE_FASTA" ] && [ -f "$REFERENCE_FASTA" ] && [ -n "$REFERENCE_GTF" ] && [ -f "$REFERENCE_GTF" ]; then
-            # Reference is configured and valid - USE IT WITHOUT PROMPTING
-            REFERENCE_GENOME="$REFERENCE_FASTA"
-            
-            if [ "$USE_CUSTOM_REFERENCE" = "yes" ]; then
-                log_success "Using configured custom reference:"
-            else
-                log_success "Using configured default reference:"
-            fi
-            log_info "FASTA: $REFERENCE_GENOME"
-            log_info "GTF: $REFERENCE_GTF"
-            
-            return 0
-        fi
-    fi
-    
-    # Priority 5: No configuration exists - prompt for first-time setup
-    prompt_reference_selection
-    
-    # Validate selected reference
-    if [ ! -f "$REFERENCE_GENOME" ]; then
-        log_error "Reference genome not found: $REFERENCE_GENOME"
-        log_info "Please run: bash install.sh --download-reference"
+    # Priority 2: Read from config (set by install.sh)
+    if [ ! -f "$REF_CONFIG" ]; then
+        log_error "Reference configuration not found: $REF_CONFIG"
+        log_error "Please run: bash install.sh"
         exit 1
     fi
     
-    if [ ! -f "$REFERENCE_GTF" ]; then
+    source "$REF_CONFIG"
+    
+    if [ -z "$REFERENCE_FASTA" ] || [ ! -f "$REFERENCE_FASTA" ]; then
+        log_error "Reference genome not found: $REFERENCE_FASTA"
+        log_error "Please run: bash install.sh"
+        exit 1
+    fi
+    
+    if [ -z "$REFERENCE_GTF" ] || [ ! -f "$REFERENCE_GTF" ]; then
         log_error "Reference GTF not found: $REFERENCE_GTF"
-        log_info "Please run: bash install.sh --download-reference"
+        log_error "Please run: bash install.sh"
         exit 1
     fi
     
-    log_success "Reference genome: $REFERENCE_GENOME"
-    log_success "Reference GTF: $REFERENCE_GTF"
+    REFERENCE_GENOME="$REFERENCE_FASTA"
+    
+    if [ "$USE_CUSTOM_REFERENCE" = "yes" ]; then
+        log_success "Using configured custom reference:"
+    else
+        log_success "Using configured default reference:"
+    fi
+    log_info "FASTA: $REFERENCE_GENOME"
+    log_info "GTF: $REFERENCE_GTF"
 }
+
 
 # Check or build genome index
 check_or_build_index() {
