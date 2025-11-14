@@ -21,7 +21,7 @@ A production-ready RNA-seq alignment module supporting STAR and HISAT2 aligners 
 ## Quick Start
 
 Clone repository
-git clone https://github.com/yourusername/alignment-module.git
+git clone https://github.com/transcriptomic-pipeline/alignment.git
 cd alignment-module
 
 Install (interactive mode)
