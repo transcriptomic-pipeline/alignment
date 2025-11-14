@@ -65,19 +65,19 @@ See [USAGE.md](USAGE.md) for complete usage examples.
 
 ### Basic Usage
 
-Interactive mode - prompts for aligner selection
+**Interactive mode** - prompts for aligner selection
 
 bash run_alignment.sh -i input_directory -o output_directory
 
-Use STAR only
+**Use STAR onl**y
 
 bash run_alignment.sh -i qc_output/trimmed/PE -o alignment_output --aligner star -t 20
 
-Use HISAT2 only
+**Use HISAT2 only**
 
 bash run_alignment.sh -i qc_output/trimmed/PE -o alignment_output --aligner hisat2 -t 12
 
-Use BOTH aligners for comparison
+**Use BOTH aligners** for comparison
 
 bash run_alignment.sh -i qc_output/trimmed/PE -o alignment_output --aligner both -t 20
 
