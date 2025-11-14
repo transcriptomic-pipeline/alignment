@@ -347,13 +347,15 @@ prompt_reference_selection() {
             
         2)
             if [ "$HAS_PREVIOUS" = "yes" ]; then
-                # Use previous reference
-                USE_CUSTOM_REFERENCE="$PREV_TYPE"
-                REFERENCE_GENOME="$PREV_FASTA"
-                REFERENCE_GTF="$PREV_GTF"
+                # Use previous reference - LOAD ALL VALUES FROM CONFIG
+                source "$REF_CONFIG"  # Re-source to get all variables
                 
-                # Load index paths from config
-                source "$REF_CONFIG"
+                USE_CUSTOM_REFERENCE="$USE_CUSTOM_REFERENCE"
+                REFERENCE_GENOME="$REFERENCE_FASTA"
+                REFERENCE_GTF="$REFERENCE_GTF"
+                STAR_INDEX_DIR="$STAR_INDEX_DIR"
+                HISAT2_INDEX_DIR="$HISAT2_INDEX_DIR"
+                HISAT2_INDEX_PREFIX="$HISAT2_INDEX_PREFIX"
                 
                 log_success "Using previous reference"
                 log_info "FASTA: $REFERENCE_GENOME"
