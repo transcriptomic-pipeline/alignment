@@ -512,8 +512,15 @@ check_star_index() {
     log_info "Building STAR genome index..."
     log_warning "This may take 30-60 minutes and requires ~32 GB RAM"
     
-    read -p "Build STAR index now? [Y/n] (auto-continue in 30s): " -t 30 -n 1 -r
+    # FIX: Handle timeout properly - default to YES
+    read -p "Build STAR index now? [Y/n] (auto-continue in 30s): " -t 30 -n 1 -r || true
     echo
+    
+    # If no input (timeout or empty), default to YES
+    if [ -z "$REPLY" ]; then
+        REPLY="Y"
+        log_info "No response, auto-continuing with index build..."
+    fi
     
     if [[ ! $REPLY =~ ^[Nn]$ ]]; then
         mkdir -p "$STAR_INDEX_DIR"
@@ -553,8 +560,15 @@ check_hisat2_index() {
     log_info "Building HISAT2 genome index..."
     log_warning "This may take 20-40 minutes"
     
-    read -p "Build HISAT2 index now? [Y/n] (auto-continue in 30s): " -t 30 -n 1 -r
+    # FIX: Handle timeout properly - default to YES
+    read -p "Build HISAT2 index now? [Y/n] (auto-continue in 30s): " -t 30 -n 1 -r || true
     echo
+    
+    # If no input (timeout or empty), default to YES
+    if [ -z "$REPLY" ]; then
+        REPLY="Y"
+        log_info "No response, auto-continuing with index build..."
+    fi
     
     if [[ ! $REPLY =~ ^[Nn]$ ]]; then
         mkdir -p "$HISAT2_INDEX_DIR"
