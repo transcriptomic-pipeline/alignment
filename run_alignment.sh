@@ -512,35 +512,31 @@ check_star_index() {
     log_info "Building STAR genome index..."
     log_warning "This may take 30-60 minutes and requires ~32 GB RAM"
     
-    # FIX: Handle timeout properly - default to YES
-    read -p "Build STAR index now? [Y/n] (auto-continue in 30s): " -t 30 -n 1 -r || true
+    # Handle timeout properly - default to YES
+    read -t 30 -p "Build STAR index now? [Y/n] (auto-continue in 30s): " -n 1 -r REPLY || REPLY=""
     echo
     
-    # If no input (timeout or empty), default to YES
-    if [ -z "$REPLY" ]; then
-        REPLY="Y"
-        log_info "No response, auto-continuing with index build..."
+    # Only exit if user explicitly says NO
+    if [[ "$REPLY" =~ ^[Nn]$ ]]; then
+        log_error "STAR index is required for alignment"
+        exit 1
     fi
     
-    if [[ ! $REPLY =~ ^[Nn]$ ]]; then
-        mkdir -p "$STAR_INDEX_DIR"
-        
-        log_info "Running STAR genome index build..."
-        "$STAR_BIN" --runThreadN "$THREADS" \
-            --runMode genomeGenerate \
-            --genomeDir "$STAR_INDEX_DIR" \
-            --genomeFastaFiles "$REFERENCE_GENOME" \
-            --sjdbGTFfile "$REFERENCE_GTF" \
-            --sjdbOverhang 100 2>&1 | tee "${SCRIPT_DIR}/star_index_build.log"
-        
-        if [ -f "$INDEX_COMPLETE" ]; then
-            log_success "STAR index built successfully"
-        else
-            log_error "STAR index build failed"
-            exit 1
-        fi
+    # Continue with index build (YES by default)
+    mkdir -p "$STAR_INDEX_DIR"
+    
+    log_info "Running STAR genome index build..."
+    "$STAR_BIN" --runThreadN "$THREADS" \
+        --runMode genomeGenerate \
+        --genomeDir "$STAR_INDEX_DIR" \
+        --genomeFastaFiles "$REFERENCE_GENOME" \
+        --sjdbGTFfile "$REFERENCE_GTF" \
+        --sjdbOverhang 100 2>&1 | tee "${SCRIPT_DIR}/star_index_build.log"
+    
+    if [ -f "$INDEX_COMPLETE" ]; then
+        log_success "STAR index built successfully"
     else
-        log_error "STAR index is required for alignment"
+        log_error "STAR index build failed"
         exit 1
     fi
 }
@@ -560,30 +556,26 @@ check_hisat2_index() {
     log_info "Building HISAT2 genome index..."
     log_warning "This may take 20-40 minutes"
     
-    # FIX: Handle timeout properly - default to YES
-    read -p "Build HISAT2 index now? [Y/n] (auto-continue in 30s): " -t 30 -n 1 -r || true
+    # Handle timeout properly - default to YES
+    read -t 30 -p "Build HISAT2 index now? [Y/n] (auto-continue in 30s): " -n 1 -r REPLY || REPLY=""
     echo
     
-    # If no input (timeout or empty), default to YES
-    if [ -z "$REPLY" ]; then
-        REPLY="Y"
-        log_info "No response, auto-continuing with index build..."
+    # Only exit if user explicitly says NO
+    if [[ "$REPLY" =~ ^[Nn]$ ]]; then
+        log_error "HISAT2 index is required for alignment"
+        exit 1
     fi
     
-    if [[ ! $REPLY =~ ^[Nn]$ ]]; then
-        mkdir -p "$HISAT2_INDEX_DIR"
-        
-        log_info "Running HISAT2 genome index build..."
-        "$HISAT2_BUILD_BIN" -p "$THREADS" "$REFERENCE_GENOME" "$INDEX_BASE" 2>&1 | tee "${SCRIPT_DIR}/hisat2_index_build.log"
-        
-        if [ -f "${INDEX_BASE}.1.ht2" ]; then
-            log_success "HISAT2 index built successfully"
-        else
-            log_error "HISAT2 index build failed"
-            exit 1
-        fi
+    # Continue with index build (YES by default)
+    mkdir -p "$HISAT2_INDEX_DIR"
+    
+    log_info "Running HISAT2 genome index build..."
+    "$HISAT2_BUILD_BIN" -p "$THREADS" "$REFERENCE_GENOME" "$INDEX_BASE" 2>&1 | tee "${SCRIPT_DIR}/hisat2_index_build.log"
+    
+    if [ -f "${INDEX_BASE}.1.ht2" ]; then
+        log_success "HISAT2 index built successfully"
     else
-        log_error "HISAT2 index is required for alignment"
+        log_error "HISAT2 index build failed"
         exit 1
     fi
 }
